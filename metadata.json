@@ -1,0 +1,6 @@
+{
+  "name": "Parlamenta — Gestão Inteligente de Gabinete",
+  "description": "Plataforma SaaS multi-gabinete para gestão inteligente de gabinete conectado, central de atendimento, protocolos, fluxo parlamentar e inteligência territorial.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,360 @@
+export type ModuleType =
+  | 'dashboard'
+  | 'atendimento'
+  | 'protocolos'
+  | 'flow'
+  | 'agenda'
+  | 'equipe'
+  | 'territorial'
+  | 'documentos'
+  | 'newsletter'
+  | 'imprensa'
+  | 'site'
+  | 'legislativo'
+  | 'legislativo_projetos'
+  | 'legislativo_oficios'
+  | 'legislativo_parlamento'
+  | 'integracoes'
+  | 'relatorios'
+  | 'admin';
+
+export type UserRole =
+  | 'deputado'
+  | 'chefe_gabinete'
+  | 'coordenador_atendimento'
+  | 'assessor_parlamentar'
+  | 'comunicacao';
+
+export type ChannelType = 'whatsapp' | 'instagram' | 'messenger' | 'email' | 'telefone' | 'presencial';
+
+export type PriorityType = 'baixa' | 'media' | 'alta' | 'urgente';
+
+export type ProtocolStatus =
+  | 'novo'
+  | 'em_analise'
+  | 'em_execucao'
+  | 'aguardando_orgao'
+  | 'revisao_coordenador'
+  | 'resolvido'
+  | 'cancelado';
+
+export type SLAStatus = 'normal' | 'alerta_48h' | 'atrasado';
+
+export interface Cabinet {
+  id: string;
+  name: string;
+  parliamentarian: string;
+  sphere: 'estadual' | 'federal';
+  house: string; // Ex: ALMT, Câmara dos Deputados
+  state: string; // MT, DF, etc.
+  party: string;
+  logoUrl?: string;
+}
+
+export interface TeamMember {
+  id: string;
+  name: string;
+  role: UserRole;
+  roleTitle: string;
+  email: string;
+  avatar: string;
+  activeProtocols: number;
+  completedProtocols: number;
+  overdueProtocols: number;
+  avgResolutionDays: number;
+  status: 'disponivel' | 'em_campo' | 'ocupado';
+}
+
+export interface Citizen {
+  id: string;
+  name: string;
+  documentMasked: string; // LGPD masked (e.g. ***.456.789-**)
+  email: string;
+  phone: string;
+  city: string;
+  neighborhood: string;
+  category: 'Cidadão Geral' | 'Liderança Comunitária' | 'Representante de Entidade' | 'Prefeito/Vereador';
+  interactionsCount: number;
+}
+
+export interface ChatMessage {
+  id: string;
+  sender: 'citizen' | 'cabinet' | 'system';
+  content: string;
+  timestamp: string;
+  channel: ChannelType;
+  attachments?: { name: string; size: string; type: string }[];
+}
+
+export interface Conversation {
+  id: string;
+  citizen: Citizen;
+  channel: ChannelType;
+  lastMessage: string;
+  lastMessageTime: string;
+  unreadCount: number;
+  tags: string[];
+  suggestedProtocol?: {
+    theme: string;
+    city: string;
+    priority: PriorityType;
+    summary: string;
+  };
+  linkedProtocolId?: string;
+  status: 'aberta' | 'triada' | 'fechada';
+  messages: ChatMessage[];
+}
+
+export interface ProtocolTimelineEvent {
+  id: string;
+  timestamp: string;
+  author: string;
+  role: string;
+  action: string;
+  description: string;
+  badge?: string;
+}
+
+export interface Protocol {
+  id: string;
+  number: string; // e.g., "PRT-2026-0042"
+  citizenName: string;
+  citizenCity: string;
+  citizenPhone: string;
+  citizenCategory: string;
+  channel: ChannelType;
+  theme: 'Saúde' | 'Educação' | 'Infraestrutura' | 'Agricultura Familiar' | 'Segurança Pública' | 'Cultura & Esporte' | 'Meio Ambiente';
+  subject: string;
+  description: string;
+  priority: PriorityType;
+  status: ProtocolStatus;
+  assigneeId: string;
+  assigneeName: string;
+  coordinatorId: string;
+  coordinatorName: string;
+  createdAt: string;
+  deadline: string;
+  slaStatus: SLAStatus;
+  hoursElapsedTotal: number;
+  hoursElapsedWithAssignee: number;
+  tags: string[];
+  timeline: ProtocolTimelineEvent[];
+  linkedTaskId?: string;
+  attachments: { id: string; name: string; size: string; type: string }[];
+  resolutionNotes?: string;
+  citizenFeedbackStatus?: 'pendente' | 'enviada_sucesso' | 'falha_envio';
+  citizenFeedbackText?: string;
+  citizenFeedbackChannel?: ChannelType;
+}
+
+export interface FlowTask {
+  id: string;
+  protocolId?: string;
+  protocolNumber?: string;
+  title: string;
+  description: string;
+  assigneeName: string;
+  dueDate: string;
+  priority: PriorityType;
+  completed: boolean;
+  type: 'visita' | 'oficio' | 'ligacao' | 'reuniao' | 'vistoria';
+  location?: string;
+}
+
+export interface CalendarEvent {
+  id: string;
+  title: string;
+  start: string;
+  end: string;
+  type: 'plenario' | 'audiencia' | 'visita_municipio' | 'reuniao' | 'comissao';
+  location: string;
+  city: string;
+  attendees: string[];
+  protocolId?: string;
+}
+
+export interface MunicipalityData {
+  id: string;
+  name: string;
+  region: 'Baixada Cuiabana' | 'Norte' | 'Médio-Norte' | 'Sul' | 'Araguaia' | 'Oeste';
+  population: number;
+  demandsCount: number;
+  demandsResolved: number;
+  demandsTopThemes: { theme: string; count: number }[];
+  election2022: {
+    votesCandidate: number;
+    votesTotal: number;
+    percentage: number;
+    ranking: number;
+    electorate: number;
+  };
+  election2018: {
+    votesCandidate: number;
+    percentage: number;
+    ranking: number;
+  };
+  leadAssessor: string;
+}
+
+export interface DocumentModel {
+  id: string;
+  code: string;
+  title: string;
+  category: 'Ofício' | 'Requerimento' | 'Projeto de Lei' | 'Emenda Parlamentar' | 'Indicação';
+  recipient: string;
+  author: string;
+  createdAt: string;
+  version: string;
+  status: 'rascunho' | 'revisao' | 'assinado' | 'protocolado';
+  contentPreview: string;
+}
+
+export interface PressRelease {
+  id: string;
+  title: string;
+  slug: string;
+  summary: string;
+  body: string;
+  tags: string[];
+  author: string;
+  status: 'rascunho' | 'revisao_chefia' | 'aprovado' | 'distribuido';
+  targetMedia: string[];
+  createdAt: string;
+  aiAssisted: boolean;
+}
+
+export interface CMSPost {
+  id: string;
+  title: string;
+  category: string;
+  publishDate: string;
+  status: 'rascunho' | 'em_revisao' | 'publicado';
+  views: number;
+  featured: boolean;
+}
+
+export interface AuditLog {
+  id: string;
+  timestamp: string;
+  userName: string;
+  userRole: string;
+  action: string;
+  resource: string;
+  details: string;
+  ip: string;
+}
+
+export interface NewsletterSubscriber {
+  id: string;
+  name: string;
+  email: string;
+  city: string;
+  source: 'Site do Mandato' | 'Redes Sociais' | 'Atendimento Presencial' | 'QR Code Evento';
+  subscribedAt: string;
+  status: 'ativo' | 'pendente_confirmacao' | 'descadastrado';
+  tags: string[]; // ex: 'Saúde', 'Infraestrutura', 'Educação', 'Agro Familiar', 'Cuiabá'
+  emailsReceived: number;
+  openRate: number; // percentage
+}
+
+export interface NewsletterCampaign {
+  id: string;
+  title: string;
+  subject: string;
+  targetType: 'all' | 'categories';
+  targetTags: string[];
+  targetCities: string[];
+  sentAt?: string;
+  scheduledFor?: string;
+  status: 'rascunho' | 'agendado' | 'disparado';
+  recipientsCount: number;
+  openRate?: number;
+  clickRate?: number;
+  template: 'informativo_semanal' | 'prestacao_contas' | 'boletim_regional' | 'alerta_urgente';
+  bodyPreview: string;
+}
+
+export type VoteChoice = 'sim' | 'nao' | 'abstencao' | 'ausente';
+
+export interface Parliamentarian {
+  id: string;
+  name: string;
+  popularName: string;
+  party: string;
+  partyColor: string;
+  bloc: 'Governo' | 'Oposição' | 'Independente';
+  seatNumber: number; // 1 to 24 for ALMT
+  role?: string;
+  electoralBase: string;
+  avatar?: string;
+  phone?: string;
+  email?: string;
+  alignmentScore: number; // 0 to 100%
+  themeAlignments?: Record<string, number>;
+}
+
+export interface VotingSession {
+  id: string;
+  matterCode: string;
+  matterTitle: string;
+  theme: 'Saúde' | 'Infraestrutura' | 'Agricultura & Meio Ambiente' | 'Educação' | 'Tributário & Orçamento' | 'Segurança Pública' | 'Servidores Públicos';
+  date: string;
+  sessionNumber: string;
+  quorumType: 'Maioria Simples' | 'Maioria Absoluta' | 'Dois Terços (2/3)';
+  mandateVote: VoteChoice;
+  result: 'Aprovado' | 'Rejeitado';
+  votes: Record<string, VoteChoice>; // parliamentarianId -> choice
+  summary: string;
+  strategicNote?: string;
+}
+
+export interface LegislativeBill {
+  id: string;
+  code: string;
+  type: 'Projeto de Lei Ordinária' | 'Projeto de Lei Complementar' | 'PEC' | 'Projeto de Resolução';
+  title: string;
+  theme: 'Saúde' | 'Educação' | 'Infraestrutura' | 'Agricultura Familiar' | 'Segurança Pública' | 'Tributário & Orçamento' | 'Meio Ambiente';
+  status: 'redacao' | 'protocolado' | 'ccjr' | 'comissao_tematica' | 'plenario' | 'sancionado';
+  author: string;
+  coAuthors: string[];
+  createdAt: string;
+  ementa: string;
+  fullText: string;
+  justificativa: string;
+  budgetImpactEstimate?: string;
+  aiAnalysis?: {
+    constitutionalStatus: 'conforme' | 'atencao' | 'inconstitucional_parcial';
+    constitutionalScore: number;
+    legislativeTechniqueScore: number;
+    budgetFeasibility: string;
+    strengths: string[];
+    risksAndWarnings: string[];
+    suggestedAmendments: string[];
+    analyzedAt: string;
+  };
+}
+
+export interface OfficialLetterModel {
+  id: string;
+  code: string;
+  subject: string;
+  recipientName: string;
+  recipientRole: string;
+  recipientOrg: string;
+  cityTarget?: string;
+  date: string;
+  status: 'minuta' | 'revisao_juridica' | 'assinado_deputado' | 'protocolado_orgao' | 'respondido';
+  body: string;
+  deadlineResponseDays?: number;
+  linkedProtocolId?: string;
+  aiVerification?: {
+    institutionalToneScore: number;
+    protocolaryCompliance: 'aprovado' | 'ajustes_sugeridos' | 'inconforme';
+    formalityCheck: string;
+    clarityCheck: string;
+    missingReferences: string[];
+    recommendations: string[];
+    verifiedAt: string;
+  };
+}
+
