@@ -15,7 +15,11 @@ const MAX_ATTEMPTS = 6;
 const BATCH = 20;
 
 export const mailConfigured = () => Boolean(process.env.RESEND_API_KEY && process.env.RESEND_FROM_EMAIL);
-export const appUrl = () => (process.env.APP_URL && !process.env.APP_URL.startsWith('MY_') ? process.env.APP_URL : 'http://localhost:3000').replace(/\/+$/, '');
+export const appUrl = () => {
+  const explicit = process.env.APP_URL && !process.env.APP_URL.startsWith('MY_') ? process.env.APP_URL : '';
+  const railway = process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : '';
+  return (explicit || railway || 'http://localhost:3000').replace(/\/+$/, '');
+};
 
 export const esc = (s: unknown) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
