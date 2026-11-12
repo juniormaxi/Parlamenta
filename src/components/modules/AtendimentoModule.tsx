@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   MessageSquare,
   Search,
@@ -20,6 +20,20 @@ import {
 } from 'lucide-react';
 import { Conversation, ChannelType, Protocol, PriorityType } from '../../types';
 import { useDialog } from '../common/Dialogs';
+import { api } from '../../lib/api';
+import { MunicipioAutocomplete } from '../common/MunicipioAutocomplete';
+import type { Taxonomy, EntryChannel } from './banco/ui';
+
+/** Tag aplicada a todo atendimento criado em "Registrar Manual". */
+export const MANUAL_ENTRY_TAG = 'Lançado Manualmente';
+
+export interface ManualEntryData {
+  name: string;
+  city: string;
+  phone: string;
+  channelName: string;
+  summary: string;
+}
 
 interface AtendimentoModuleProps {
   conversations: Conversation[];
@@ -37,12 +51,18 @@ interface AtendimentoModuleProps {
     priority: PriorityType;
   }) => void;
   onSendMessage: (conversationId: string, text: string) => void;
+  onCreateManualEntry: (data: ManualEntryData) => void;
+  canManageChannels?: boolean;
+  onManageChannels?: () => void;
 }
 
 export const AtendimentoModule: React.FC<AtendimentoModuleProps> = ({
   conversations,
   onCreateProtocolFromConversation,
   onSendMessage,
+  onCreateManualEntry,
+  canManageChannels = false,
+  onManageChannels,
 }) => {
   const dialog = useDialog();
   const [activeChannelFilter, setActiveChannelFilter] = useState<string>('todos');
@@ -53,6 +73,51 @@ export const AtendimentoModule: React.FC<AtendimentoModuleProps> = ({
   const [replyInput, setReplyInput] = useState<string>('');
   const [protocolModalOpen, setProtocolModalOpen] = useState(false);
   const [newManualContactOpen, setNewManualContactOpen] = useState(false);
+  const emptyManual: ManualEntryData = { name: '', city: '', phone: '', channelName: '', summary: '' };
+  const [manualForm, setManualForm] = useState<ManualEntryData>(emptyManual);
+  const [entryChannels, setEntryChannels] = useState<EntryChannel[] | null>(null);
+
+  // Opções do "Canal de Entrada" vêm de Banco de Dados › Categorias › Canais de Entrada.
+  useEffect(() => {
+    if (!newManualContactOpen) return;
+    let alive = true;
+    api<Taxonomy>('/tenant/db/taxonomy')
+      .then((tx) => {
+        if (!alive) return;
+        setEntryChannels(tx.entryChannels);
+        setManualForm((f) => (f.channelName ? f : { ...f, channelName: tx.entryChannels[0]?.name ?? '' }));
+      })
+      .catch((e) => {
+        if (alive) {
+          setEntryChannels([]);
+          dialog.alert({ title: 'Erro ao carregar canais de entrada', message: (e as Error).message, tone: 'danger' });
+        }
+      });
+    return () => {
+      alive = false;
+    };
+  }, [newManualContactOpen, dialog]);
+
+  const closeManual = () => {
+    setNewManualContactOpen(false);
+    setManualForm(emptyManual);
+  };
+
+  const saveManual = () => {
+    if (!manualForm.name.trim() || !manualForm.channelName || !manualForm.summary.trim()) {
+      dialog.alert({ title: 'Campos obrigatórios', message: 'Informe o nome, o canal de entrada e o resumo da demanda.', tone: 'warning' });
+      return;
+    }
+    onCreateManualEntry({
+      name: manualForm.name.trim(),
+      city: manualForm.city.trim(),
+      phone: manualForm.phone.trim(),
+      channelName: manualForm.channelName,
+      summary: manualForm.summary.trim(),
+    });
+    dialog.toast('Atendimento manual registrado na Caixa de Entrada.');
+    closeManual();
+  };
 
   // Form state for protocol confirmation
   const [protocolForm, setProtocolForm] = useState({
@@ -111,7 +176,8 @@ export const AtendimentoModule: React.FC<AtendimentoModuleProps> = ({
     setReplyInput('');
   };
 
-  const getChannelBadge = (ch: ChannelType) => {
+  const getChannelBadge = (ch: ChannelType, label?: string) => {
+    if (label) return <span className="text-[#102C45] font-semibold text-[11px]">{label}</span>;
     switch (ch) {
       case 'whatsapp':
         return <span className="text-emerald-700 font-semibold text-[11px]">WhatsApp</span>;
@@ -125,6 +191,8 @@ export const AtendimentoModule: React.FC<AtendimentoModuleProps> = ({
         return <span className="text-amber-700 font-semibold text-[11px]">Telefone</span>;
       case 'presencial':
         return <span className="text-[#102C45] font-semibold text-[11px]">Presencial ALMT</span>;
+      case 'web':
+        return <span className="text-violet-700 font-semibold text-[11px]">Site</span>;
     }
   };
 
@@ -217,7 +285,7 @@ export const AtendimentoModule: React.FC<AtendimentoModuleProps> = ({
                     </div>
 
                     <div className="flex items-center gap-2 text-[11px] text-slate-500">
-                      {getChannelBadge(c.channel)}
+                      {getChannelBadge(c.channel, c.channelLabel)}
                       <span>·</span>
                       <span className="truncate">{c.citizen.city}</span>
                     </div>
@@ -228,11 +296,17 @@ export const AtendimentoModule: React.FC<AtendimentoModuleProps> = ({
 
                     <div className="flex items-center justify-between mt-1 pt-1 border-t border-slate-100 text-[10px]">
                       <div className="flex items-center gap-1.5 text-slate-400">
-                        {c.tags.map((t) => (
-                          <span key={t} className="font-medium text-slate-600">
-                            #{t}
-                          </span>
-                        ))}
+                        {c.tags.map((t) =>
+                          t === MANUAL_ENTRY_TAG ? (
+                            <span key={t} className="px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 font-semibold">
+                              {t}
+                            </span>
+                          ) : (
+                            <span key={t} className="font-medium text-slate-600">
+                              #{t}
+                            </span>
+                          )
+                        )}
                       </div>
 
                       {c.linkedProtocolId ? (
@@ -393,7 +467,7 @@ export const AtendimentoModule: React.FC<AtendimentoModuleProps> = ({
             >
               <input
                 type="text"
-                placeholder={`Responder a ${selectedConversation.citizen.name} via ${selectedConversation.channel}...`}
+                placeholder={`Responder a ${selectedConversation.citizen.name} via ${selectedConversation.channelLabel ?? selectedConversation.channel}...`}
                 value={replyInput}
                 onChange={(e) => setReplyInput(e.target.value)}
                 className="flex-1 px-4 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-800 placeholder:text-slate-400 focus:outline-hidden focus:ring-1 focus:ring-[#176B80]"
@@ -533,34 +607,39 @@ export const AtendimentoModule: React.FC<AtendimentoModuleProps> = ({
         </div>
       )}
 
-      {/* Modal: Novo Atendimento Manual (Presencial / Telefone) */}
+      {/* Modal: Novo Atendimento Manual */}
       {newManualContactOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
-          <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-md shadow-xl overflow-hidden">
+          <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-xl shadow-xl overflow-hidden">
             <div className="px-6 py-4 bg-[#102C45] text-white flex items-center justify-between">
               <h3 className="font-bold text-sm">Registrar Atendimento Manual</h3>
-              <button onClick={() => setNewManualContactOpen(false)} className="text-slate-300">
+              <button onClick={closeManual} className="text-slate-300" aria-label="Fechar">
                 <X className="w-4 h-4" />
               </button>
             </div>
             <div className="p-6 space-y-3 text-xs text-slate-700">
               <p className="text-slate-500">
-                Utilize para registrar cidadãos que compareceram presencialmente ao gabinete na ALMT ou entraram em contato via linha telefônica.
+                Utilize para registrar cidadãos atendidos fora dos canais digitais. O registro entra na Caixa de Entrada com a tag{' '}
+                <span className="px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 font-semibold">{MANUAL_ENTRY_TAG}</span>.
               </p>
               <div>
-                <label className="font-semibold text-slate-800 block mb-1">Nome Completo</label>
+                <label className="font-semibold text-slate-800 block mb-1">Nome Completo *</label>
                 <input
                   type="text"
+                  value={manualForm.name}
+                  onChange={(e) => setManualForm({ ...manualForm, name: e.target.value })}
                   placeholder="Ex: João da Silva"
                   className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
+                  autoFocus
                 />
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="font-semibold text-slate-800 block mb-1">Município (MT)</label>
-                  <input
-                    type="text"
-                    placeholder="Ex: Sinop"
+                  <label className="font-semibold text-slate-800 block mb-1">Município</label>
+                  <MunicipioAutocomplete
+                    value={manualForm.city}
+                    onChange={(city) => setManualForm({ ...manualForm, city })}
+                    placeholder="Digite: Sinop, Cuiabá…"
                     className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
                   />
                 </div>
@@ -568,41 +647,63 @@ export const AtendimentoModule: React.FC<AtendimentoModuleProps> = ({
                   <label className="font-semibold text-slate-800 block mb-1">Telefone</label>
                   <input
                     type="text"
+                    value={manualForm.phone}
+                    onChange={(e) => setManualForm({ ...manualForm, phone: e.target.value })}
                     placeholder="(65) 99999-9999"
                     className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
                   />
                 </div>
               </div>
               <div>
-                <label className="font-semibold text-slate-800 block mb-1">Canal de Entrada</label>
-                <select className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs">
-                  <option value="presencial">Presencial no Gabinete ALMT</option>
-                  <option value="telefone">Ligação Telefônica Oficial</option>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="font-semibold text-slate-800">Canal de Entrada *</label>
+                  {canManageChannels && onManageChannels && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        closeManual();
+                        onManageChannels();
+                      }}
+                      className="text-[11px] text-[#176B80] font-semibold hover:underline"
+                    >
+                      Gerenciar canais
+                    </button>
+                  )}
+                </div>
+                <select
+                  value={manualForm.channelName}
+                  onChange={(e) => setManualForm({ ...manualForm, channelName: e.target.value })}
+                  disabled={!entryChannels || entryChannels.length === 0}
+                  className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs disabled:opacity-60"
+                >
+                  {!entryChannels && <option value="">Carregando…</option>}
+                  {entryChannels?.length === 0 && <option value="">Nenhum canal cadastrado</option>}
+                  {entryChannels?.map((c) => (
+                    <option key={c.id} value={c.name}>
+                      {c.name}
+                    </option>
+                  ))}
                 </select>
+                {entryChannels?.length === 0 && (
+                  <p className="text-[11px] text-amber-700 mt-1">Cadastre os canais em Banco de Dados › Categorias › Canais de Entrada.</p>
+                )}
               </div>
               <div>
-                <label className="font-semibold text-slate-800 block mb-1">Resumo da Demanda</label>
+                <label className="font-semibold text-slate-800 block mb-1">Resumo da Demanda *</label>
                 <textarea
-                  rows={2}
+                  rows={8}
+                  value={manualForm.summary}
+                  onChange={(e) => setManualForm({ ...manualForm, summary: e.target.value })}
                   placeholder="Relato trazido pelo cidadão..."
-                  className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
+                  className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs min-h-[160px] resize-y leading-relaxed"
                 />
               </div>
             </div>
             <div className="px-6 py-3 bg-slate-50 border-t border-slate-200 flex justify-end gap-2">
-              <button
-                onClick={() => setNewManualContactOpen(false)}
-                className="px-3 py-1.5 text-xs text-slate-600"
-              >
+              <button onClick={closeManual} className="px-3 py-1.5 text-xs text-slate-600">
                 Cancelar
               </button>
-              <button
-                onClick={() => {
-                  dialog.toast('Atendimento manual registrado com sucesso no histórico do gabinete.');
-                  setNewManualContactOpen(false);
-                }}
-                className="px-4 py-1.5 text-xs font-semibold text-white bg-[#102C45] rounded-lg"
-              >
+              <button onClick={saveManual} className="px-4 py-1.5 text-xs font-semibold text-white bg-[#102C45] rounded-lg">
                 Salvar Atendimento
               </button>
             </div>

@@ -14,19 +14,27 @@ import {
 interface GuiaDocumentacaoModalProps {
   isOpen: boolean;
   onClose: () => void;
+  /** Renderiza a documentação inline (ex.: aba de Administração), sem overlay nem botões de fechar. */
+  embedded?: boolean;
 }
 
 export const GuiaDocumentacaoModal: React.FC<GuiaDocumentacaoModalProps> = ({
   isOpen,
   onClose,
+  embedded = false,
 }) => {
   const [activeTab, setActiveTab] = useState<'matriz' | 'arquitetura' | 'lgpd' | 'execucao'>('matriz');
 
-  if (!isOpen) return null;
+  if (!isOpen && !embedded) return null;
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4">
-      <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-4xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+  const card = (
+      <div
+        className={
+          embedded
+            ? 'bg-white border border-slate-200 rounded-xl w-full shadow-xs overflow-hidden flex flex-col'
+            : 'bg-white border border-slate-200 rounded-2xl w-full max-w-4xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]'
+        }
+      >
         {/* Header */}
         <div className="px-6 py-4 bg-[#102C45] text-white flex items-center justify-between">
           <div>
@@ -42,13 +50,15 @@ export const GuiaDocumentacaoModal: React.FC<GuiaDocumentacaoModalProps> = ({
               Matriz de Mock, Arquitetura & Especificações Técnicas
             </h2>
           </div>
-          <button
-            onClick={onClose}
-            className="text-slate-300 hover:text-white p-1 rounded-md"
-            aria-label="Fechar"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          {!embedded && (
+            <button
+              onClick={onClose}
+              className="text-slate-300 hover:text-white p-1 rounded-md"
+              aria-label="Fechar"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          )}
         </div>
 
         {/* Tab Navigation */}
@@ -257,6 +267,7 @@ export const GuiaDocumentacaoModal: React.FC<GuiaDocumentacaoModalProps> = ({
         </div>
 
         {/* Footer */}
+        {!embedded && (
         <div className="px-6 py-3.5 bg-slate-50 border-t border-slate-200 flex items-center justify-end">
           <button
             onClick={onClose}
@@ -265,7 +276,15 @@ export const GuiaDocumentacaoModal: React.FC<GuiaDocumentacaoModalProps> = ({
             Fechar Documentação
           </button>
         </div>
+        )}
       </div>
+  );
+
+  if (embedded) return card;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4">
+      {card}
     </div>
   );
 };

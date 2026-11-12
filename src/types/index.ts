@@ -30,7 +30,7 @@ export type UserRole =
   | 'assessor_parlamentar'
   | 'comunicacao';
 
-export type ChannelType = 'whatsapp' | 'instagram' | 'messenger' | 'email' | 'telefone' | 'presencial';
+export type ChannelType = 'whatsapp' | 'instagram' | 'messenger' | 'email' | 'telefone' | 'presencial' | 'web';
 
 export type PriorityType = 'baixa' | 'media' | 'alta' | 'urgente';
 
@@ -95,6 +95,8 @@ export interface Conversation {
   id: string;
   citizen: Citizen;
   channel: ChannelType;
+  /** Nome do canal cadastrado em Categorias › Canais de Entrada (registros manuais). */
+  channelLabel?: string;
   lastMessage: string;
   lastMessageTime: string;
   unreadCount: number;
@@ -128,7 +130,10 @@ export interface Protocol {
   citizenPhone: string;
   citizenCategory: string;
   channel: ChannelType;
-  theme: 'Saúde' | 'Educação' | 'Infraestrutura' | 'Agricultura Familiar' | 'Segurança Pública' | 'Cultura & Esporte' | 'Meio Ambiente';
+  /** Nome do canal cadastrado em Categorias › Canais de Entrada. */
+  channelLabel?: string;
+  /** Tema cadastrado em Categorias › Temas de Demanda. */
+  theme: string;
   subject: string;
   description: string;
   priority: PriorityType;
@@ -150,6 +155,11 @@ export interface Protocol {
   citizenFeedbackStatus?: 'pendente' | 'enviada_sucesso' | 'falha_envio';
   citizenFeedbackText?: string;
   citizenFeedbackChannel?: ChannelType;
+  citizenEmail?: string;
+  /** true quando o protocolo está gravado no servidor (não é dado de demonstração). */
+  persisted?: boolean;
+  /** Origem: equipe do gabinete ou formulário do site do parlamentar. */
+  source?: 'interno' | 'web';
 }
 
 export interface FlowTask {

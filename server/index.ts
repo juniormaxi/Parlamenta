@@ -8,6 +8,8 @@ import express, { type Request, type Response, type NextFunction } from 'express
 import { HttpError, bad } from './http';
 import { bancoRouter, startSpeechWorker } from './banco';
 import { clippingRouter, startClippingScheduler } from './clipping';
+import { tenantProtocolsRouter, publicRouter } from './protocols';
+import { startEmailWorker } from './mailer';
 import { db, audit, tenantStorageBytes, dbFileBytes, DB_PATH } from './db';
 import {
   TENANT_ROLES,
@@ -144,9 +146,10 @@ const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', 'loopback');
 
-app.use((_req, res, next) => {
+app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-Frame-Options', 'DENY');
+  // The public citizen page (/site/<gabinete>) is meant to be embedded in the parliamentarian's own site.
+  if (!req.path.startsWith('/site/')) res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'same-origin');
   next();
 });
@@ -508,7 +511,12 @@ tenant.use('/db', bancoRouter);
 // Comunicação › Clipping — always scoped to the session's tenant.
 tenant.use('/clipping', clippingRouter);
 
+// Protocolos & Demandas — always scoped to the session's tenant.
+tenant.use('/protocols', tenantProtocolsRouter);
+
 api.use('/tenant', tenant);
+// Site do parlamentar (sem login): abertura de demanda e consulta de protocolo.
+api.use('/public', publicRouter);
 
 api.use((_req, res) => res.status(404).json({ error: 'Rota não encontrada.' }));
 
@@ -532,6 +540,7 @@ if (fs.existsSync(dist)) {
 
 startSpeechWorker();
 startClippingScheduler();
+startEmailWorker();
 
 app.listen(PORT, HOST, () => {
   console.log(`Parlamenta API em http://${HOST}:${PORT}/api`);

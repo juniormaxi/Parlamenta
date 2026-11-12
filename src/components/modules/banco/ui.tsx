@@ -126,10 +126,18 @@ export interface PropositionType {
   acronym: string;
   description: string;
 }
+/** Item de lista simples do gabinete (canal de entrada, tema de demanda). */
+export interface EntryChannel {
+  id: string;
+  name: string;
+  description: string;
+}
 export interface Taxonomy {
   categories: TaxonomyCategory[];
   tags: TaxonomyTag[];
   propositionTypes: PropositionType[];
+  entryChannels: EntryChannel[];
+  demandThemes: EntryChannel[];
   colors: string[];
 }
 

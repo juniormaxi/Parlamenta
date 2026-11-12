@@ -38,6 +38,55 @@ const DEFAULT_PROPOSITION_TYPES: [string, string, string][] = [
   ['Emenda Parlamentar', 'EMD', 'Emenda ao orçamento ou a proposição em tramitação'],
 ];
 
+/**
+ * Simple per-cabinet option lists (name + description). Each default carries the seed version that
+ * introduced it, so new defaults reach existing cabinets once without re-adding ones they deleted.
+ */
+type SimpleList = { table: 'entry_channels' | 'demand_themes'; seededCol: string; defaults: [string, string, number][] };
+
+const ENTRY_CHANNELS: SimpleList = {
+  table: 'entry_channels',
+  seededCol: 'entry_channels_seeded',
+  defaults: [
+    ['Presencial no Gabinete', 'Cidadão compareceu ao gabinete', 1],
+    ['Ligação Telefônica', 'Contato pela linha telefônica oficial', 1],
+    ['WhatsApp Oficial', 'Mensagem no WhatsApp do gabinete', 2],
+    ['E-mail Institucional', 'Mensagem no e-mail oficial', 2],
+    ['Instagram Direct', 'Mensagem direta no Instagram', 2],
+  ],
+};
+const DEMAND_THEMES: SimpleList = {
+  table: 'demand_themes',
+  seededCol: 'demand_themes_seeded',
+  defaults: [
+    ['Saúde', '', 1],
+    ['Educação', '', 1],
+    ['Infraestrutura', '', 1],
+    ['Agricultura Familiar', '', 1],
+    ['Segurança Pública', '', 1],
+    ['Cultura & Esporte', '', 1],
+    ['Meio Ambiente', '', 1],
+  ],
+};
+
+function ensureSimpleList(list: SimpleList, tenantId: string) {
+  const t = db.prepare(`SELECT ${list.seededCol} AS v FROM tenants WHERE id = ?`).get(tenantId) as any;
+  const target = Math.max(...list.defaults.map((d) => d[2]));
+  if (!t || t.v >= target) return;
+  const ins = db.prepare(`INSERT OR IGNORE INTO ${list.table} (id, tenant_id, name, description) VALUES (?, ?, ?, ?)`);
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    for (const [n, d, v] of list.defaults) if (v > t.v) ins.run(crypto.randomUUID(), tenantId, n, d);
+    db.prepare(`UPDATE tenants SET ${list.seededCol} = ? WHERE id = ?`).run(target, tenantId);
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+}
+export const ensureEntryChannels = (tenantId: string) => ensureSimpleList(ENTRY_CHANNELS, tenantId);
+export const ensureDemandThemes = (tenantId: string) => ensureSimpleList(DEMAND_THEMES, tenantId);
+
 export function ensurePropositionTypes(tenantId: string) {
   const t = db.prepare(`SELECT proposition_types_seeded FROM tenants WHERE id = ?`).get(tenantId) as any;
   if (!t || t.proposition_types_seeded) return;
@@ -142,6 +191,12 @@ const cleanColor = (v: unknown) => ((TAG_COLORS as readonly string[]).includes(S
 taxonomyRouter.get('/taxonomy', (req, res) => {
   ensureTaxonomy(tid(req));
   ensurePropositionTypes(tid(req));
+  ensureEntryChannels(tid(req));
+  ensureDemandThemes(tid(req));
+  const simple = (table: string) =>
+    db.prepare(`SELECT id, name, description, created_at FROM ${table} WHERE tenant_id = ? ORDER BY name COLLATE NOCASE`).all(tid(req));
+  const entryChannels = simple('entry_channels');
+  const demandThemes = simple('demand_themes');
   const propositionTypes = db
     .prepare(`SELECT id, name, acronym, description, created_at FROM proposition_types WHERE tenant_id = ? ORDER BY name COLLATE NOCASE`)
     .all(tid(req));
@@ -160,7 +215,7 @@ taxonomyRouter.get('/taxonomy', (req, res) => {
          FROM contact_tags ct WHERE ct.tenant_id = ? ORDER BY ct.name COLLATE NOCASE`
     )
     .all(tid(req));
-  res.json({ categories, tags, propositionTypes, colors: TAG_COLORS });
+  res.json({ categories, tags, propositionTypes, entryChannels, demandThemes, colors: TAG_COLORS });
 });
 
 // ----- categories -----
@@ -334,3 +389,47 @@ taxonomyRouter.delete('/proposition-types/:id', (req, res) => {
   audit({ ...actor(req), action: 'proposition_type.deleted', target: cur.name });
   res.json({ ok: true });
 });
+
+// ----- listas simples: canais de entrada e temas de demanda -----
+function simpleListRoutes(path: string, list: SimpleList, label: { one: string; notFound: string; audit: string }) {
+  taxonomyRouter.post(`/${path}`, (req, res) => {
+    requireManager(req);
+    ensureSimpleList(list, tid(req));
+    const name = cleanName(req.body?.name, 60, label.one);
+    if (db.prepare(`SELECT 1 FROM ${list.table} WHERE tenant_id = ? AND name = ?`).get(tid(req), name)) {
+      throw new HttpError(409, `"${name}" já existe.`);
+    }
+    const id = crypto.randomUUID();
+    db.prepare(`INSERT INTO ${list.table} (id, tenant_id, name, description) VALUES (?, ?, ?, ?)`).run(
+      id, tid(req), name, String(req.body?.description ?? '').trim().slice(0, 200)
+    );
+    audit({ ...actor(req), action: `${label.audit}.created`, target: name });
+    res.status(201).json({ id });
+  });
+
+  taxonomyRouter.patch(`/${path}/:id`, (req, res) => {
+    requireManager(req);
+    const cur = db.prepare(`SELECT * FROM ${list.table} WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
+    if (!cur) throw new HttpError(404, label.notFound);
+    const name = req.body?.name === undefined ? cur.name : cleanName(req.body.name, 60, label.one);
+    if (db.prepare(`SELECT 1 FROM ${list.table} WHERE tenant_id = ? AND name = ? AND id <> ?`).get(tid(req), name, cur.id)) {
+      throw new HttpError(409, `"${name}" já existe.`);
+    }
+    const description = req.body?.description === undefined ? cur.description : String(req.body.description).trim().slice(0, 200);
+    db.prepare(`UPDATE ${list.table} SET name = ?, description = ? WHERE id = ?`).run(name, description, cur.id);
+    audit({ ...actor(req), action: `${label.audit}.updated`, target: name, details: name !== cur.name ? { renamedFrom: cur.name } : undefined });
+    res.json({ ok: true });
+  });
+
+  taxonomyRouter.delete(`/${path}/:id`, (req, res) => {
+    requireManager(req);
+    const cur = db.prepare(`SELECT * FROM ${list.table} WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
+    if (!cur) throw new HttpError(404, label.notFound);
+    db.prepare(`DELETE FROM ${list.table} WHERE id = ?`).run(cur.id);
+    audit({ ...actor(req), action: `${label.audit}.deleted`, target: cur.name });
+    res.json({ ok: true });
+  });
+}
+
+simpleListRoutes('entry-channels', ENTRY_CHANNELS, { one: 'canal de entrada', notFound: 'Canal de entrada não encontrado.', audit: 'entry_channel' });
+simpleListRoutes('demand-themes', DEMAND_THEMES, { one: 'tema de demanda', notFound: 'Tema de demanda não encontrado.', audit: 'demand_theme' });

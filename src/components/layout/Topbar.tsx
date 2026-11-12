@@ -5,7 +5,6 @@ import {
   Building2,
   ChevronDown,
   PlayCircle,
-  HelpCircle,
   Menu,
   Check,
   Shield,
@@ -23,7 +22,6 @@ interface TopbarProps {
   onChangeRole: (role: UserRole) => void;
   teamMembers: TeamMember[];
   onOpenGuidedTour: () => void;
-  onOpenDocs: () => void;
   onToggleMobileMenu: () => void;
   searchQuery: string;
   onSearchChange: (q: string) => void;
@@ -41,7 +39,6 @@ export const Topbar: React.FC<TopbarProps> = ({
   onChangeRole,
   teamMembers,
   onOpenGuidedTour,
-  onOpenDocs,
   onToggleMobileMenu,
   searchQuery,
   onSearchChange,
@@ -160,16 +157,6 @@ export const Topbar: React.FC<TopbarProps> = ({
           <PlayCircle className="w-3.5 h-3.5 text-[#102C45]" />
           <span className="hidden sm:inline">Fluxo Demonstrativo</span>
           <span className="sm:hidden">Demo</span>
-        </button>
-
-        {/* Technical Docs & Mock Matrix */}
-        <button
-          onClick={onOpenDocs}
-          className="p-1.5 text-slate-500 hover:text-slate-800 rounded-lg hover:bg-slate-100 transition-colors"
-          title="Documentação de Arquitetura & Matriz Mock"
-          aria-label="Ver documentação"
-        >
-          <HelpCircle className="w-4 h-4" />
         </button>
 
         {/* Notifications */}

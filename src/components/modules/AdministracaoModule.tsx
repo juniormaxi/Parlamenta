@@ -23,7 +23,9 @@ import {
   Terminal,
   ArrowRight,
   SlidersHorizontal,
+  BookOpen,
 } from 'lucide-react';
+import { GuiaDocumentacaoModal } from './GuiaDocumentacaoModal';
 import { AuditLog, TeamMember } from '../../types';
 import { useDialog } from '../common/Dialogs';
 
@@ -37,7 +39,7 @@ export const AdministracaoModule: React.FC<AdministracaoModuleProps> = ({
   teamMembers,
 }) => {
   const dialog = useDialog();
-  const [activeTab, setActiveTab] = useState<'usuarios' | 'sla' | 'seguranca' | 'auditoria' | 'ia'>('ia');
+  const [activeTab, setActiveTab] = useState<'usuarios' | 'sla' | 'seguranca' | 'auditoria' | 'ia' | 'docs'>('ia');
 
   // SLA rules
   const [slaRules, setSlaRules] = useState([
@@ -219,8 +221,22 @@ export const AdministracaoModule: React.FC<AdministracaoModuleProps> = ({
             <Key className="w-3.5 h-3.5 text-[#176B80]" />
             <span>MFA & Segurança</span>
           </button>
+          <button
+            onClick={() => setActiveTab('docs')}
+            className={`px-3 py-1.5 text-xs font-semibold rounded-md whitespace-nowrap transition-colors flex items-center gap-1.5 ${
+              activeTab === 'docs'
+                ? 'bg-white text-slate-900 shadow-xs font-bold'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <BookOpen className="w-3.5 h-3.5 text-[#176B80]" />
+            <span>Documentação Técnica</span>
+          </button>
         </div>
       </div>
+
+      {/* Tab: Documentação Técnica */}
+      {activeTab === 'docs' && <GuiaDocumentacaoModal isOpen embedded onClose={() => setActiveTab('ia')} />}
 
       {/* Tab: Inteligência Artificial (IA) */}
       {activeTab === 'ia' && (

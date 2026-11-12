@@ -224,6 +224,9 @@ export const LoginView: React.FC<LoginViewProps> = ({
             <p className="text-[10px] text-slate-500">
               Conformidade LGPD (Lei nº 13.709/2018) · ICP-Brasil Ready
             </p>
+            <p className="pt-2 text-[10px] text-slate-400">
+              Desenvolvido por <span className="font-semibold text-slate-300">IBRASSI</span>
+            </p>
           </div>
         </div>
 

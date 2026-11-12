@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { FolderTree, Pencil, Plus, Search, Tags, Trash2, Users, Lock, FileSignature } from 'lucide-react';
+import { FolderTree, Pencil, Plus, Search, Tags, Trash2, Users, Lock, FileSignature, Inbox, ListChecks } from 'lucide-react';
 import { api } from '../../../lib/api';
 import { useDialog } from '../../common/Dialogs';
 import {
@@ -15,9 +15,43 @@ import {
   type TaxonomyCategory,
   type TaxonomyTag,
   type PropositionType,
+  type EntryChannel,
 } from './ui';
 
-export type CategoriasTab = 'categorias' | 'etiquetas' | 'tipos';
+export type CategoriasTab = 'categorias' | 'etiquetas' | 'tipos' | 'canais' | 'temas';
+
+/** Listas simples (nome + descrição) usadas como opções de formulários. */
+const SIMPLE_LISTS = {
+  canais: {
+    key: 'entryChannels',
+    path: 'entry-channels',
+    singular: 'canal de entrada',
+    column: 'Canal de entrada',
+    newLabel: 'Novo canal de entrada',
+    placeholder: 'Ex.: Evento no Município',
+    help: (
+      <>
+        Opções do campo <strong>Canal de Entrada</strong> em <strong>Caixa de Entrada › Registrar Manual</strong> e em{' '}
+        <strong>Protocolos › Novo Protocolo</strong>.
+      </>
+    ),
+  },
+  temas: {
+    key: 'demandThemes',
+    path: 'demand-themes',
+    singular: 'tema de demanda',
+    column: 'Tema de demanda',
+    newLabel: 'Novo tema de demanda',
+    placeholder: 'Ex.: Habitação',
+    help: (
+      <>
+        Opções do campo <strong>Tema da Demanda</strong> em <strong>Protocolos › Novo Protocolo</strong>.
+      </>
+    ),
+  },
+} as const;
+type SimpleListTab = keyof typeof SIMPLE_LISTS;
+const isSimpleTab = (t: string): t is SimpleListTab => t in SIMPLE_LISTS;
 type Tab = CategoriasTab;
 
 export function CategoriasModule({
@@ -36,6 +70,7 @@ export function CategoriasModule({
   const [editingCat, setEditingCat] = useState<TaxonomyCategory | 'new' | null>(null);
   const [editingTag, setEditingTag] = useState<TaxonomyTag | 'new' | null>(null);
   const [editingType, setEditingType] = useState<PropositionType | 'new' | null>(null);
+  const [editingSimple, setEditingSimple] = useState<{ tab: SimpleListTab; item: EntryChannel | null } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -54,6 +89,33 @@ export function CategoriasModule({
   const types = (tx?.propositionTypes ?? []).filter(
     (t) => !f || t.name.toLowerCase().includes(f) || t.acronym.toLowerCase().includes(f) || t.description.toLowerCase().includes(f)
   );
+
+  const simpleCfg = isSimpleTab(tab) ? SIMPLE_LISTS[tab] : null;
+  const simpleItems = simpleCfg
+    ? (tx?.[simpleCfg.key] ?? []).filter((c) => !f || c.name.toLowerCase().includes(f) || c.description.toLowerCase().includes(f))
+    : [];
+
+  const removeSimple = async (c: EntryChannel) => {
+    if (!simpleCfg) return;
+    const ok = await dialog.confirm({
+      title: `Excluir ${simpleCfg.singular}`,
+      message: (
+        <>
+          Excluir <strong>{c.name}</strong>? Deixará de aparecer como opção nos formulários. Registros já feitos não são alterados.
+        </>
+      ),
+      confirmLabel: 'Excluir',
+      tone: 'danger',
+    });
+    if (!ok) return;
+    try {
+      await api(`/tenant/db/${simpleCfg.path}/${c.id}`, { method: 'DELETE' });
+      dialog.toast('Item excluído.');
+      load();
+    } catch (e) {
+      dialog.alert({ title: 'Não foi possível excluir', message: (e as Error).message, tone: 'danger' });
+    }
+  };
 
   const removeType = async (t: PropositionType) => {
     const ok = await dialog.confirm({
@@ -129,16 +191,27 @@ export function CategoriasModule({
     { id: 'categorias', label: 'Categorias de Contatos', icon: FolderTree, count: tx?.categories.length },
     { id: 'etiquetas', label: 'Etiquetas de Classificação', icon: Tags, count: tx?.tags.length },
     { id: 'tipos', label: 'Tipos de Proposição', icon: FileSignature, count: tx?.propositionTypes.length },
+    { id: 'canais', label: 'Canais de Entrada', icon: Inbox, count: tx?.entryChannels.length },
+    { id: 'temas', label: 'Temas de Demanda', icon: ListChecks, count: tx?.demandThemes.length },
   ];
-  const newLabel = { categorias: 'Nova categoria', etiquetas: 'Nova etiqueta', tipos: 'Novo tipo de proposição' }[tab];
-  const openNew = () => (tab === 'categorias' ? setEditingCat('new') : tab === 'etiquetas' ? setEditingTag('new') : setEditingType('new'));
+  const newLabel = simpleCfg?.newLabel ?? { categorias: 'Nova categoria', etiquetas: 'Nova etiqueta', tipos: 'Novo tipo de proposição' }[tab as 'categorias'];
+  const openNew = () =>
+    tab === 'categorias'
+      ? setEditingCat('new')
+      : tab === 'etiquetas'
+        ? setEditingTag('new')
+        : tab === 'tipos'
+          ? setEditingType('new')
+          : isSimpleTab(tab)
+            ? setEditingSimple({ tab, item: null })
+            : undefined;
 
   return (
     <div className="space-y-4">
       <ModuleHeader
         icon={FolderTree}
         title="Categorias"
-        subtitle="Defina categorias e etiquetas de contatos e os tipos de proposição usados nos documentos do gabinete"
+        subtitle="Defina categorias e etiquetas de contatos, tipos de proposição, canais de entrada e temas de demanda"
         actions={
           canManage && (
             <button className={btnPrimary} onClick={openNew}>
@@ -181,7 +254,9 @@ export function CategoriasModule({
           </p>
         )}
 
-        {tab === 'tipos' ? (
+        {simpleCfg ? (
+          <p className="px-4 pt-3 text-[11px] text-slate-500">{simpleCfg.help}</p>
+        ) : tab === 'tipos' ? (
           <p className="px-4 pt-3 text-[11px] text-slate-500">
             Tipos disponíveis em <strong>Documentos do Gabinete › Redigir Novo Documento</strong>. A sigla compõe o número do documento (ex.: OF-123/2026-GAB).
           </p>
@@ -196,7 +271,39 @@ export function CategoriasModule({
           </p>
         )}
 
-        {tab === 'tipos' ? (
+        {simpleCfg ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs mt-2">
+              <thead className="bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500">
+                <tr>
+                  <th className="text-left font-semibold px-4 py-2.5">{simpleCfg.column}</th>
+                  <th className="text-left font-semibold px-4 py-2.5">Descrição</th>
+                  {canManage && <th className="px-4 py-2.5" />}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {simpleItems.map((c) => (
+                  <tr key={c.id} className="hover:bg-slate-50/60">
+                    <td className="px-4 py-2.5 font-semibold text-slate-900">{c.name}</td>
+                    <td className="px-4 py-2.5 text-slate-600">{c.description || <span className="text-slate-300">—</span>}</td>
+                    {canManage && (
+                      <td className="px-4 py-2.5">
+                        <RowActions onEdit={() => setEditingSimple({ tab: tab as SimpleListTab, item: c })} onDelete={() => removeSimple(c)} />
+                      </td>
+                    )}
+                  </tr>
+                ))}
+                {tx && simpleItems.length === 0 && (
+                  <tr>
+                    <td colSpan={3} className="px-4 py-10 text-center text-slate-500">
+                      {f ? 'Nada encontrado.' : 'Nenhum item cadastrado.'}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        ) : tab === 'tipos' ? (
           <div className="overflow-x-auto">
             <table className="w-full text-xs mt-2">
               <thead className="bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500">
@@ -288,6 +395,18 @@ export function CategoriasModule({
         </div>
         )}
       </div>
+
+      {editingSimple && (
+        <SimpleItemModal
+          cfg={SIMPLE_LISTS[editingSimple.tab]}
+          item={editingSimple.item}
+          onClose={() => setEditingSimple(null)}
+          onSaved={() => {
+            setEditingSimple(null);
+            load();
+          }}
+        />
+      )}
 
       {editingType && (
         <PropositionTypeModal
@@ -541,6 +660,67 @@ function PropositionTypeModal({ item, onClose, onSaved }: { item: PropositionTyp
         <p className="text-[11px] text-slate-500">
           Exemplo de numeração: <span className="font-mono text-slate-700">{acronym || 'SIGLA'}-123/{new Date().getFullYear()}-GAB</span>
         </p>
+        <button type="submit" className="hidden" />
+      </form>
+    </Modal>
+  );
+}
+
+function SimpleItemModal({
+  cfg,
+  item,
+  onClose,
+  onSaved,
+}: {
+  cfg: (typeof SIMPLE_LISTS)[SimpleListTab];
+  item: EntryChannel | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const dialog = useDialog();
+  const [name, setName] = useState(item?.name ?? '');
+  const [description, setDescription] = useState(item?.description ?? '');
+  const [saving, setSaving] = useState(false);
+
+  const save = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (!name.trim()) return;
+    setSaving(true);
+    try {
+      const body = { name, description };
+      if (item) await api(`/tenant/db/${cfg.path}/${item.id}`, { method: 'PATCH', body });
+      else await api(`/tenant/db/${cfg.path}`, { method: 'POST', body });
+      dialog.toast(item ? 'Item atualizado.' : 'Item criado.');
+      onSaved();
+    } catch (err) {
+      dialog.alert({ title: 'Não foi possível salvar', message: (err as Error).message, tone: 'warning' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      title={item ? `Editar ${cfg.singular}` : cfg.newLabel}
+      onClose={onClose}
+      footer={
+        <>
+          <button className={btnGhost} onClick={onClose}>
+            Cancelar
+          </button>
+          <button className={btnPrimary} onClick={() => save()} disabled={saving || !name.trim()}>
+            {saving ? 'Salvando…' : 'Salvar'}
+          </button>
+        </>
+      }
+    >
+      <form onSubmit={save} className="space-y-3">
+        <Field label="Nome *">
+          <input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} maxLength={60} autoFocus placeholder={cfg.placeholder} />
+        </Field>
+        <Field label="Descrição">
+          <input className={inputCls} value={description} onChange={(e) => setDescription(e.target.value)} maxLength={200} />
+        </Field>
         <button type="submit" className="hidden" />
       </form>
     </Modal>

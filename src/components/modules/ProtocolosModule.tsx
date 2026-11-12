@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   FileSpreadsheet,
   Columns,
@@ -20,7 +20,12 @@ import {
   ShieldCheck,
   Check,
   Workflow,
+  Globe,
+  Copy,
+  ExternalLink,
 } from 'lucide-react';
+import { WEB_DEMAND_TAG } from '../../lib/protocols';
+import { useDialog } from '../common/Dialogs';
 import {
   Protocol,
   ProtocolStatus,
@@ -35,7 +40,17 @@ interface ProtocolosModuleProps {
   onOpenNewProtocol: () => void;
   onUpdateProtocol: (updated: Protocol) => void;
   onNavigateToFlow?: () => void;
+  /** Endereço público do formulário do site do parlamentar (abrir e consultar protocolos). */
+  siteUrl?: string;
 }
+
+const WebBadge = () => (
+  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-violet-50 text-violet-700 border border-violet-200 text-[10px] font-semibold">
+    <Globe className="w-3 h-3" />
+    {WEB_DEMAND_TAG}
+  </span>
+);
+const isWeb = (p: Protocol) => p.tags.includes(WEB_DEMAND_TAG);
 
 export const ProtocolosModule: React.FC<ProtocolosModuleProps> = ({
   protocols,
@@ -43,7 +58,15 @@ export const ProtocolosModule: React.FC<ProtocolosModuleProps> = ({
   onOpenNewProtocol,
   onUpdateProtocol,
   onNavigateToFlow,
+  siteUrl,
 }) => {
+  const dialog = useDialog();
+  const [siteModalOpen, setSiteModalOpen] = useState(false);
+  const themeOptions = useMemo(() => [...new Set(protocols.map((p) => p.theme).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR')), [protocols]);
+  const cityOptions = useMemo(
+    () => [...new Set(protocols.map((p) => p.citizenCity).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR')),
+    [protocols]
+  );
   const [viewMode, setViewMode] = useState<'table' | 'kanban'>('table');
   const [searchFilter, setSearchFilter] = useState('');
   const [channelFilter, setChannelFilter] = useState<string>('todos');
@@ -135,7 +158,7 @@ export const ProtocolosModule: React.FC<ProtocolosModuleProps> = ({
             author: 'Equipe de Atendimento',
             role: 'Devolutiva',
             action: 'Devolutiva Auditada Enviada',
-            description: `Resposta formal encaminhada ao cidadão via ${selectedProtocol.channel.toUpperCase()}.`,
+            description: `Resposta formal encaminhada ao cidadão via ${(selectedProtocol.channelLabel ?? selectedProtocol.channel).toUpperCase()}.`,
           },
         ],
       };
@@ -197,6 +220,16 @@ export const ProtocolosModule: React.FC<ProtocolosModuleProps> = ({
               </button>
             </div>
 
+            {siteUrl && (
+              <button
+                onClick={() => setSiteModalOpen(true)}
+                className="px-3 py-1.5 text-xs font-semibold text-[#102C45] bg-white border border-slate-200 hover:bg-slate-50 rounded-lg transition-colors flex items-center gap-1.5"
+                title="Formulário público para o site do parlamentar"
+              >
+                <Globe className="w-3.5 h-3.5 text-violet-600" />
+                <span>Formulário do Site</span>
+              </button>
+            )}
             <button
               onClick={onOpenNewProtocol}
               className="px-3.5 py-1.5 text-xs font-semibold text-white bg-[#102C45] hover:bg-[#176B80] rounded-lg transition-colors flex items-center gap-1.5 shadow-xs"
@@ -227,11 +260,11 @@ export const ProtocolosModule: React.FC<ProtocolosModuleProps> = ({
               className="w-full p-1.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-700"
             >
               <option value="todos">Todos os Temas</option>
-              <option value="Saúde">Saúde</option>
-              <option value="Educação">Educação</option>
-              <option value="Infraestrutura">Infraestrutura</option>
-              <option value="Agricultura Familiar">Agricultura Familiar</option>
-              <option value="Segurança Pública">Segurança Pública</option>
+              {themeOptions.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
             </select>
           </div>
 
@@ -242,13 +275,11 @@ export const ProtocolosModule: React.FC<ProtocolosModuleProps> = ({
               className="w-full p-1.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-700"
             >
               <option value="todos">Todos os Municípios</option>
-              <option value="Rondonópolis">Rondonópolis</option>
-              <option value="Cuiabá">Cuiabá</option>
-              <option value="Sinop">Sinop</option>
-              <option value="Nova Mutum">Nova Mutum</option>
-              <option value="Juína">Juína</option>
-              <option value="Tangará da Serra">Tangará da Serra</option>
-              <option value="Barra do Garças">Barra do Garças</option>
+              {cityOptions.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
             </select>
           </div>
 
@@ -278,6 +309,7 @@ export const ProtocolosModule: React.FC<ProtocolosModuleProps> = ({
               <option value="instagram">Instagram</option>
               <option value="presencial">Presencial</option>
               <option value="telefone">Telefone</option>
+              <option value="web">Site (Demanda Web)</option>
             </select>
           </div>
         </div>
@@ -320,7 +352,10 @@ export const ProtocolosModule: React.FC<ProtocolosModuleProps> = ({
                     </td>
                     <td className="py-3 px-4 max-w-xs">
                       <div className="font-medium text-slate-800 truncate">{p.subject}</div>
-                      <div className="text-[11px] text-[#176B80]">{p.theme}</div>
+                      <div className="text-[11px] text-[#176B80] flex items-center gap-1.5">
+                        {p.theme}
+                        {isWeb(p) && <WebBadge />}
+                      </div>
                     </td>
                     <td className="py-3 px-4">{getPriorityBadge(p.priority)}</td>
                     <td className="py-3 px-4">{getStatusBadge(p.status)}</td>
@@ -399,6 +434,7 @@ export const ProtocolosModule: React.FC<ProtocolosModuleProps> = ({
                       <h4 className="text-xs font-semibold text-slate-900 leading-snug line-clamp-2">
                         {p.subject}
                       </h4>
+                      {isWeb(p) && <WebBadge />}
                       <div className="text-[11px] text-slate-500 flex items-center justify-between pt-1 border-t border-slate-100">
                         <span className="truncate max-w-[90px]">{p.citizenCity}</span>
                         <span className="font-mono text-[10px] text-slate-400">
@@ -425,8 +461,9 @@ export const ProtocolosModule: React.FC<ProtocolosModuleProps> = ({
                 </span>
                 {getStatusBadge(selectedProtocol.status)}
                 {getPriorityBadge(selectedProtocol.priority)}
+                {isWeb(selectedProtocol) && <WebBadge />}
                 <span className="text-xs text-slate-400 font-mono">
-                  Canal: {selectedProtocol.channel.toUpperCase()}
+                  Canal: {(selectedProtocol.channelLabel ?? selectedProtocol.channel).toUpperCase()}
                 </span>
               </div>
               <h2 className="text-base font-bold text-slate-900 mt-1">
@@ -438,6 +475,12 @@ export const ProtocolosModule: React.FC<ProtocolosModuleProps> = ({
                 <span>Município: <strong className="text-slate-800">{selectedProtocol.citizenCity}</strong></span>
                 <span>·</span>
                 <span>Telefone: {selectedProtocol.citizenPhone}</span>
+                {selectedProtocol.citizenEmail && (
+                  <>
+                    <span>·</span>
+                    <span>E-mail: {selectedProtocol.citizenEmail}</span>
+                  </>
+                )}
                 <span>·</span>
                 <span>Categoria: {selectedProtocol.citizenCategory}</span>
               </div>
@@ -613,6 +656,68 @@ export const ProtocolosModule: React.FC<ProtocolosModuleProps> = ({
                   ))
                 )}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {siteModalOpen && siteUrl && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+          <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-xl shadow-xl overflow-hidden">
+            <div className="px-6 py-4 bg-[#102C45] text-white flex items-center justify-between">
+              <div>
+                <h3 className="font-bold text-sm">Formulário do Site do Parlamentar</h3>
+                <p className="text-xs text-slate-300">Abertura de demandas e consulta de protocolo pelo cidadão</p>
+              </div>
+              <button onClick={() => setSiteModalOpen(false)} className="text-slate-300 hover:text-white" aria-label="Fechar">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-6 space-y-4 text-xs text-slate-700">
+              <ul className="list-disc list-inside space-y-1 text-slate-600">
+                <li>
+                  Demandas enviadas pelo site entram aqui com status <strong>Novo</strong> e a tag <WebBadge />.
+                </li>
+                <li>
+                  O cidadão acompanha a linha do tempo informando o <strong>número do protocolo</strong> e os <strong>4 últimos dígitos do telefone</strong>{' '}
+                  (proteção LGPD). Ele vê apenas abertura, mudanças de status e a resposta do gabinete — nunca notas internas ou nomes da equipe.
+                </li>
+              </ul>
+              {[
+                { label: 'Link da página', value: siteUrl },
+                {
+                  label: 'Código para incorporar no site (iframe)',
+                  value: `<iframe src="${siteUrl}?embed=1" title="Protocolo de atendimento" style="width:100%;min-height:900px;border:0" loading="lazy"></iframe>`,
+                },
+              ].map((f) => (
+                <div key={f.label}>
+                  <label className="font-semibold text-slate-800 block mb-1">{f.label}</label>
+                  <div className="flex gap-2">
+                    <input readOnly value={f.value} className="flex-1 p-2 bg-slate-50 border border-slate-200 rounded-lg text-[11px] font-mono" onFocus={(e) => e.target.select()} />
+                    <button
+                      onClick={() =>
+                        navigator.clipboard
+                          .writeText(f.value)
+                          .then(() => dialog.toast('Copiado.'))
+                          .catch(() => dialog.alert({ title: 'Não foi possível copiar', message: 'Selecione o texto e copie manualmente.', tone: 'warning' }))
+                      }
+                      className="px-3 rounded-lg border border-slate-200 hover:bg-slate-50 flex items-center gap-1 font-semibold"
+                    >
+                      <Copy className="w-3.5 h-3.5" /> Copiar
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="px-6 py-3 bg-slate-50 border-t border-slate-200 flex justify-end gap-2">
+              <a
+                href={siteUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-4 py-1.5 text-xs font-semibold text-white bg-[#102C45] hover:bg-[#176B80] rounded-lg flex items-center gap-1.5"
+              >
+                <ExternalLink className="w-3.5 h-3.5" /> Abrir página
+              </a>
             </div>
           </div>
         </div>

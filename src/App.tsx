@@ -52,13 +52,15 @@ import { Sidebar } from './components/layout/Sidebar';
 import { Topbar } from './components/layout/Topbar';
 import { LogoUploaderModal } from './components/common/LogoUploaderModal';
 import { NovoProtocoloModal } from './components/common/NovoProtocoloModal';
+import { channelTypeFromName } from './lib/channels';
+import { hydrateProtocol } from './lib/protocols';
+import { useDialog } from './components/common/Dialogs';
 import { FluxoGuiadoModal } from './components/modules/FluxoGuiadoModal';
-import { GuiaDocumentacaoModal } from './components/modules/GuiaDocumentacaoModal';
 import { LoginView } from './components/auth/LoginView';
 
 // Modules
 import { DashboardModule } from './components/modules/DashboardModule';
-import { AtendimentoModule } from './components/modules/AtendimentoModule';
+import { AtendimentoModule, MANUAL_ENTRY_TAG, type ManualEntryData } from './components/modules/AtendimentoModule';
 import { ProtocolosModule } from './components/modules/ProtocolosModule';
 import { ParlamentaFlowModule } from './components/modules/ParlamentaFlowModule';
 import { AgendaTarefasModule } from './components/modules/AgendaTarefasModule';
@@ -148,12 +150,12 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
   const [customLogoUrl, setCustomLogoUrl] = useState<string>('');
   // Filter pre-selected when jumping to the contacts list (from an import or a category/tag).
   const [contactsFilter, setContactsFilter] = useState<{ tag?: string; category?: string }>({});
-  const [categoriasTab, setCategoriasTab] = useState<'categorias' | 'etiquetas' | 'tipos'>('categorias');
+  const [categoriasTab, setCategoriasTab] = useState<'categorias' | 'etiquetas' | 'tipos' | 'canais' | 'temas'>('categorias');
   const openContacts = (filter: { tag?: string; category?: string }) => {
     setContactsFilter(filter);
     setCurrentModule('bd_contatos');
   };
-  const openCategorias = (tab: 'categorias' | 'etiquetas' | 'tipos') => {
+  const openCategorias = (tab: 'categorias' | 'etiquetas' | 'tipos' | 'canais' | 'temas') => {
     setCategoriasTab(tab);
     setCurrentModule('bd_categorias');
   };
@@ -167,7 +169,6 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
 
   // Modals state
   const [guidedTourOpen, setGuidedTourOpen] = useState(false);
-  const [docsModalOpen, setDocsModalOpen] = useState(false);
   const [logoModalOpen, setLogoModalOpen] = useState(false);
   const [newProtocolModalOpen, setNewProtocolModalOpen] = useState(false);
 
@@ -187,67 +188,91 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
   const [bills, setBills] = useState<LegislativeBill[]>(mockLegislativeBills);
   const [officialLetters, setOfficialLetters] = useState<OfficialLetterModel[]>(mockOfficialLetters);
 
+  // Protocolos gravados no servidor (equipe + site do parlamentar) aparecem antes dos de demonstração.
+  const dialog = useDialog();
+  const loadProtocols = useCallback(async () => {
+    try {
+      const rows = await api<Protocol[]>('/tenant/protocols');
+      const server = rows.map(hydrateProtocol);
+      setProtocols((prev) => {
+        const ids = new Set(server.map((p) => p.id));
+        return [...server, ...prev.filter((p) => !p.persisted && !ids.has(p.id))];
+      });
+    } catch {
+      /* mantém os dados atuais; nova tentativa no próximo ciclo */
+    }
+  }, []);
+  useEffect(() => {
+    loadProtocols();
+    // Novas demandas do site chegam sem recarregar a página.
+    const t = window.setInterval(loadProtocols, 60_000);
+    return () => window.clearInterval(t);
+  }, [loadProtocols]);
+  useEffect(() => {
+    if (currentModule === 'protocolos' || currentModule === 'flow') loadProtocols();
+  }, [currentModule, loadProtocols]);
+
+  const persistProtocol = async (p: Protocol) => {
+    if (!p.persisted) return;
+    try {
+      const saved = hydrateProtocol(await api<Protocol>(`/tenant/protocols/${p.id}`, { method: 'PATCH', body: p }));
+      setProtocols((prev) => prev.map((x) => (x.id === saved.id ? saved : x)));
+    } catch (e) {
+      dialog.alert({ title: 'Não foi possível salvar o protocolo', message: (e as Error).message, tone: 'danger' });
+    }
+  };
+
   // Handlers for Protocol & Workflow operations
   const handleUpdateProtocol = (updated: Protocol) => {
     setProtocols((prev) =>
       prev.map((p) => (p.id === updated.id ? updated : p))
     );
+    persistProtocol(updated);
   };
 
-  const handleCreateProtocol = (data: {
+  const handleCreateProtocol = async (data: {
     citizenName: string;
     citizenCity: string;
     citizenPhone: string;
+    citizenEmail?: string;
     citizenCategory: string;
     channel: ChannelType;
+    channelLabel?: string;
     theme: any;
     subject: string;
     description: string;
     priority: PriorityType;
-  }) => {
-    const nextNum = protocols.length + 43;
-    const protocolId = `PRT-2026-00${nextNum}`;
-    const deadline = new Date();
-    deadline.setDate(deadline.getDate() + (data.priority === 'urgente' ? 1 : 2));
-
-    const newProto: Protocol = {
-      id: protocolId,
-      number: protocolId,
-      citizenName: data.citizenName,
-      citizenCity: data.citizenCity,
-      citizenPhone: data.citizenPhone,
-      citizenCategory: data.citizenCategory,
-      channel: data.channel,
-      theme: data.theme,
-      subject: data.subject,
-      description: data.description,
-      priority: data.priority,
-      status: 'novo',
-      assigneeId: '',
-      assigneeName: 'Pendente de atribuição',
-      coordinatorId: 'usr-3',
-      coordinatorName: 'Letícia Prado',
-      createdAt: new Date().toISOString(),
-      deadline: deadline.toISOString(),
-      slaStatus: 'normal',
-      hoursElapsedTotal: 0,
-      hoursElapsedWithAssignee: 0,
-      tags: [data.theme, data.citizenCity],
-      attachments: [],
-      timeline: [
-        {
-          id: `tl-${Date.now()}`,
-          timestamp: 'Agora',
-          author: 'Letícia Prado',
-          role: 'Coordenadora de Atendimento',
-          action: 'Abertura de Protocolo Oficial',
-          description: `Protocolo registrado via canal ${data.channel.toUpperCase()}.`,
-        },
-      ],
-      citizenFeedbackStatus: 'pendente',
-    };
-
-    setProtocols((prev) => [newProto, ...prev]);
+  }): Promise<Protocol | null> => {
+    let saved: Protocol;
+    try {
+      saved = hydrateProtocol(
+        await api<Protocol>('/tenant/protocols', {
+          method: 'POST',
+          body: {
+            ...data,
+            status: 'novo',
+            assigneeId: '',
+            assigneeName: 'Pendente de atribuição',
+            coordinatorId: session.user.id,
+            coordinatorName: session.user.name,
+            slaStatus: 'normal',
+            hoursElapsedTotal: 0,
+            hoursElapsedWithAssignee: 0,
+            tags: [data.theme, data.citizenCity].filter(Boolean),
+            attachments: [],
+            citizenFeedbackStatus: 'pendente',
+            authorName: session.user.name,
+            authorRole: session.user.role,
+          },
+        })
+      );
+    } catch (e) {
+      dialog.alert({ title: 'Não foi possível criar o protocolo', message: (e as Error).message, tone: 'danger' });
+      return null;
+    }
+    const protocolId = saved.number;
+    setProtocols((prev) => [saved, ...prev]);
+    dialog.toast(`Protocolo ${protocolId} criado.`);
 
     // Log in Audit
     setAuditLogs((prev) => [
@@ -263,9 +288,10 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
       },
       ...prev,
     ]);
+    return saved;
   };
 
-  const handleCreateProtocolFromConversation = (data: {
+  const handleCreateProtocolFromConversation = async (data: {
     conversationId: string;
     citizenName: string;
     citizenCity: string;
@@ -277,11 +303,11 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
     description: string;
     priority: PriorityType;
   }) => {
-    handleCreateProtocol(data);
+    const saved = await handleCreateProtocol(data);
+    if (!saved) return;
 
     // Link conversation
-    const nextNum = protocols.length + 43;
-    const protocolId = `PRT-2026-00${nextNum}`;
+    const protocolId = saved.number;
     setConversations((prev) =>
       prev.map((c) =>
         c.id === data.conversationId
@@ -289,6 +315,45 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
           : c
       )
     );
+  };
+
+  const handleCreateManualEntry = (data: ManualEntryData) => {
+    const id = `conv-manual-${Date.now()}`;
+    const channel = channelTypeFromName(data.channelName);
+    setConversations((prev) => [
+      {
+        id,
+        citizen: {
+          id: `cit-${Date.now()}`,
+          name: data.name,
+          documentMasked: '',
+          email: '',
+          phone: data.phone,
+          city: data.city,
+          neighborhood: '',
+          category: 'Cidadão Geral',
+          interactionsCount: 1,
+        },
+        channel,
+        channelLabel: data.channelName,
+        lastMessage: data.summary,
+        lastMessageTime: 'Agora',
+        unreadCount: 0,
+        tags: [MANUAL_ENTRY_TAG],
+        status: 'aberta',
+        messages: [
+          {
+            id: `msg-${Date.now()}`,
+            sender: 'system',
+            content: `Atendimento registrado manualmente por ${session.user.name} · Canal: ${data.channelName}`,
+            timestamp: 'Agora',
+            channel,
+          },
+          { id: `msg-${Date.now()}-1`, sender: 'citizen', content: data.summary, timestamp: 'Agora', channel },
+        ],
+      },
+      ...prev,
+    ]);
   };
 
   const handleSendMessage = (conversationId: string, text: string) => {
@@ -346,8 +411,7 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
     const targetMember = mockTeamMembers.find((m) => m.id === toId);
     let reassigned = 0;
 
-    setProtocols((prev) =>
-      prev.map((p) => {
+    const next = protocols.map((p) => {
         if (p.assigneeId === fromId && reassigned < count && p.status !== 'resolvido') {
           reassigned++;
           return {
@@ -369,8 +433,11 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
           };
         }
         return p;
-      })
-    );
+      });
+    setProtocols(next);
+    next.forEach((p, i) => {
+      if (p !== protocols[i]) persistProtocol(p);
+    });
   };
 
   const handleCreateDocument = (newDoc: Omit<DocumentModel, 'id'>) => {
@@ -537,7 +604,6 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
           onChangeRole={setCurrentRole}
           teamMembers={mockTeamMembers}
           onOpenGuidedTour={() => setGuidedTourOpen(true)}
-          onOpenDocs={() => setDocsModalOpen(true)}
           onToggleMobileMenu={() => setMobileMenuOpen(!mobileMenuOpen)}
           searchQuery={searchQuery}
           onSearchChange={setSearchFilter}
@@ -565,12 +631,16 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
               conversations={conversations}
               onCreateProtocolFromConversation={handleCreateProtocolFromConversation}
               onSendMessage={handleSendMessage}
+              onCreateManualEntry={handleCreateManualEntry}
+              canManageChannels={canManageDb}
+              onManageChannels={() => openCategorias('canais')}
             />
           )}
 
           {currentModule === 'protocolos' && (
             <ProtocolosModule
               protocols={protocols}
+              siteUrl={`${window.location.origin}/site/${session.tenant!.slug}`}
               teamMembers={mockTeamMembers}
               onOpenNewProtocol={() => setNewProtocolModalOpen(true)}
               onUpdateProtocol={handleUpdateProtocol}
@@ -726,6 +796,11 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
         isOpen={newProtocolModalOpen}
         onClose={() => setNewProtocolModalOpen(false)}
         onCreateProtocol={handleCreateProtocol}
+        canManageLists={canManageDb}
+        onManageList={(tab) => {
+          setNewProtocolModalOpen(false);
+          openCategorias(tab);
+        }}
       />
 
       <FluxoGuiadoModal
@@ -736,10 +811,6 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
         onNavigateToModule={(mod) => setCurrentModule(mod)}
       />
 
-      <GuiaDocumentacaoModal
-        isOpen={docsModalOpen}
-        onClose={() => setDocsModalOpen(false)}
-      />
     </div>
   );
 }

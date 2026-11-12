@@ -1,6 +1,11 @@
-import React, { useState } from 'react';
-import { X, Check, FileCheck, ShieldCheck } from 'lucide-react';
-import { Protocol, PriorityType, ChannelType } from '../../types';
+import React, { useEffect, useState } from 'react';
+import { X, Check, ShieldCheck } from 'lucide-react';
+import { PriorityType, ChannelType } from '../../types';
+import { api } from '../../lib/api';
+import { channelTypeFromName } from '../../lib/channels';
+import { MunicipioAutocomplete } from './MunicipioAutocomplete';
+import { useDialog } from './Dialogs';
+import type { Taxonomy, EntryChannel } from '../modules/banco/ui';
 
 interface NovoProtocoloModalProps {
   isOpen: boolean;
@@ -9,55 +14,133 @@ interface NovoProtocoloModalProps {
     citizenName: string;
     citizenCity: string;
     citizenPhone: string;
+    citizenEmail?: string;
     citizenCategory: string;
     channel: ChannelType;
+    channelLabel?: string;
     theme: any;
     subject: string;
     description: string;
     priority: PriorityType;
   }) => void;
+  canManageLists?: boolean;
+  onManageList?: (tab: 'canais' | 'temas') => void;
 }
 
 export const NovoProtocoloModal: React.FC<NovoProtocoloModalProps> = ({
   isOpen,
   onClose,
   onCreateProtocol,
+  canManageLists = false,
+  onManageList,
 }) => {
-  const [form, setForm] = useState({
+  const dialog = useDialog();
+  const emptyForm = {
     citizenName: '',
-    citizenCity: 'Cuiabá',
+    citizenCity: '',
     citizenPhone: '(65) 9',
+    citizenEmail: '',
     citizenCategory: 'Cidadão Geral',
-    channel: 'whatsapp' as ChannelType,
-    theme: 'Saúde',
+    channelName: '',
+    theme: '',
     subject: '',
     description: '',
     priority: 'alta' as PriorityType,
-  });
+  };
+  const [form, setForm] = useState(emptyForm);
+  const [lists, setLists] = useState<{ channels: EntryChannel[]; themes: EntryChannel[] } | null>(null);
+
+  // Canais de entrada e temas vêm de Banco de Dados › Categorias.
+  useEffect(() => {
+    if (!isOpen) return;
+    let alive = true;
+    setLists(null);
+    api<Taxonomy>('/tenant/db/taxonomy')
+      .then((tx) => {
+        if (!alive) return;
+        setLists({ channels: tx.entryChannels, themes: tx.demandThemes });
+        setForm((f) => ({
+          ...f,
+          channelName: tx.entryChannels.some((c) => c.name === f.channelName) ? f.channelName : (tx.entryChannels[0]?.name ?? ''),
+          theme: tx.demandThemes.some((t) => t.name === f.theme) ? f.theme : (tx.demandThemes[0]?.name ?? ''),
+        }));
+      })
+      .catch((e) => {
+        if (!alive) return;
+        setLists({ channels: [], themes: [] });
+        dialog.alert({ title: 'Erro ao carregar listas', message: (e as Error).message, tone: 'danger' });
+      });
+    return () => {
+      alive = false;
+    };
+  }, [isOpen, dialog]);
 
   if (!isOpen) return null;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.citizenName.trim() || !form.subject.trim()) return;
+    if (form.citizenEmail.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.citizenEmail.trim())) {
+      dialog.alert({ title: 'E-mail inválido', message: 'Confira o e-mail do cidadão ou deixe o campo em branco.', tone: 'warning' });
+      return;
+    }
+    if (!form.channelName || !form.theme) {
+      dialog.alert({ title: 'Campos obrigatórios', message: 'Selecione o canal de entrada e o tema da demanda.', tone: 'warning' });
+      return;
+    }
 
     onCreateProtocol({
       citizenName: form.citizenName,
       citizenCity: form.citizenCity,
       citizenPhone: form.citizenPhone,
+      citizenEmail: form.citizenEmail.trim(),
       citizenCategory: form.citizenCategory,
-      channel: form.channel,
+      channel: channelTypeFromName(form.channelName),
+      channelLabel: form.channelName,
       theme: form.theme,
       subject: form.subject,
       description: form.description,
       priority: form.priority,
     });
+    setForm(emptyForm);
     onClose();
   };
 
+  const manageLink = (tab: 'canais' | 'temas') =>
+    canManageLists && onManageList ? (
+      <button type="button" onClick={() => onManageList(tab)} className="text-[11px] text-[#176B80] font-semibold hover:underline">
+        Gerenciar
+      </button>
+    ) : null;
+
+  const listSelect = (
+    items: EntryChannel[] | undefined,
+    value: string,
+    onChange: (v: string) => void,
+    emptyHint: string
+  ) => (
+    <>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={!items || items.length === 0}
+        className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs disabled:opacity-60"
+      >
+        {!items && <option value="">Carregando…</option>}
+        {items?.length === 0 && <option value="">Nenhuma opção cadastrada</option>}
+        {items?.map((c) => (
+          <option key={c.id} value={c.name}>
+            {c.name}
+          </option>
+        ))}
+      </select>
+      {items?.length === 0 && <p className="text-[11px] text-amber-700 mt-1">{emptyHint}</p>}
+    </>
+  );
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
-      <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-lg shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+      <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-2xl shadow-xl overflow-hidden flex flex-col max-h-[92vh] animate-in fade-in zoom-in-95 duration-150">
         <div className="px-6 py-4 bg-[#102C45] text-white flex items-center justify-between">
           <div>
             <h3 className="font-bold text-sm">Abertura de Protocolo de Atendimento</h3>
@@ -70,7 +153,7 @@ export const NovoProtocoloModal: React.FC<NovoProtocoloModalProps> = ({
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-6 space-y-4 text-xs text-slate-700">
+        <form onSubmit={handleSubmit} className="p-6 space-y-4 text-xs text-slate-700 overflow-y-auto">
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="font-semibold text-slate-800 block mb-1">
@@ -86,27 +169,13 @@ export const NovoProtocoloModal: React.FC<NovoProtocoloModalProps> = ({
               />
             </div>
             <div>
-              <label className="font-semibold text-slate-800 block mb-1">
-                Município de Mato Grosso
-              </label>
-              <select
+              <label className="font-semibold text-slate-800 block mb-1">Município</label>
+              <MunicipioAutocomplete
                 value={form.citizenCity}
-                onChange={(e) => setForm({ ...form, citizenCity: e.target.value })}
+                onChange={(citizenCity) => setForm({ ...form, citizenCity })}
+                placeholder="Digite: Sinop, Cuiabá…"
                 className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
-              >
-                <option value="Cuiabá">Cuiabá</option>
-                <option value="Várzea Grande">Várzea Grande</option>
-                <option value="Rondonópolis">Rondonópolis</option>
-                <option value="Sinop">Sinop</option>
-                <option value="Sorriso">Sorriso</option>
-                <option value="Nova Mutum">Nova Mutum</option>
-                <option value="Tangará da Serra">Tangará da Serra</option>
-                <option value="Barra do Garças">Barra do Garças</option>
-                <option value="Juína">Juína</option>
-                <option value="Cáceres">Cáceres</option>
-                <option value="Primavera do Leste">Primavera do Leste</option>
-                <option value="Lucas do Rio Verde">Lucas do Rio Verde</option>
-              </select>
+              />
             </div>
           </div>
 
@@ -123,43 +192,42 @@ export const NovoProtocoloModal: React.FC<NovoProtocoloModalProps> = ({
               />
             </div>
             <div>
-              <label className="font-semibold text-slate-800 block mb-1">
-                Canal de Entrada
-              </label>
-              <select
-                value={form.channel}
-                onChange={(e) =>
-                  setForm({ ...form, channel: e.target.value as ChannelType })
-                }
-                className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
-              >
-                <option value="whatsapp">WhatsApp Oficial</option>
-                <option value="email">E-mail Institucional</option>
-                <option value="instagram">Instagram Direct</option>
-                <option value="presencial">Presencial no Gabinete (ALMT)</option>
-                <option value="telefone">Telefone</option>
-              </select>
+              <div className="flex items-center justify-between mb-1">
+                <label className="font-semibold text-slate-800">Canal de Entrada</label>
+                {manageLink('canais')}
+              </div>
+              {listSelect(
+                lists?.channels,
+                form.channelName,
+                (channelName) => setForm({ ...form, channelName }),
+                'Cadastre em Banco de Dados › Categorias › Canais de Entrada.'
+              )}
             </div>
+          </div>
+
+          <div>
+            <label className="font-semibold text-slate-800 block mb-1">E-mail do Cidadão</label>
+            <input
+              type="email"
+              placeholder="Opcional — recebe os alertas de andamento do protocolo"
+              value={form.citizenEmail}
+              onChange={(e) => setForm({ ...form, citizenEmail: e.target.value })}
+              className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
+            />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="font-semibold text-slate-800 block mb-1">
-                Tema da Demanda
-              </label>
-              <select
-                value={form.theme}
-                onChange={(e) => setForm({ ...form, theme: e.target.value })}
-                className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
-              >
-                <option value="Saúde">Saúde</option>
-                <option value="Educação">Educação</option>
-                <option value="Infraestrutura">Infraestrutura</option>
-                <option value="Agricultura Familiar">Agricultura Familiar</option>
-                <option value="Segurança Pública">Segurança Pública</option>
-                <option value="Cultura & Esporte">Cultura & Esporte</option>
-                <option value="Meio Ambiente">Meio Ambiente</option>
-              </select>
+              <div className="flex items-center justify-between mb-1">
+                <label className="font-semibold text-slate-800">Tema da Demanda</label>
+                {manageLink('temas')}
+              </div>
+              {listSelect(
+                lists?.themes,
+                form.theme,
+                (theme) => setForm({ ...form, theme }),
+                'Cadastre em Banco de Dados › Categorias › Temas de Demanda.'
+              )}
             </div>
             <div>
               <label className="font-semibold text-slate-800 block mb-1">
@@ -182,7 +250,7 @@ export const NovoProtocoloModal: React.FC<NovoProtocoloModalProps> = ({
 
           <div>
             <label className="font-semibold text-slate-800 block mb-1">
-              Assunto Sintético
+              Assunto
             </label>
             <input
               type="text"
@@ -199,11 +267,11 @@ export const NovoProtocoloModal: React.FC<NovoProtocoloModalProps> = ({
               Detalhamento dos Fatos
             </label>
             <textarea
-              rows={3}
+              rows={8}
               placeholder="Descreva o contexto, solicitações e dados técnicos..."
               value={form.description}
               onChange={(e) => setForm({ ...form, description: e.target.value })}
-              className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
+              className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs min-h-[160px] resize-y leading-relaxed"
             />
           </div>
 

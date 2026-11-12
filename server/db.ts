@@ -178,6 +178,85 @@ db.exec(`
     UNIQUE (tenant_id, name)
   );
 
+  -- Canais de entrada de atendimento (Presencial, Telefone...) usados em Caixa de Entrada › Registrar Manual.
+  CREATE TABLE IF NOT EXISTS entry_channels (
+    id          TEXT PRIMARY KEY,
+    tenant_id   TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL COLLATE NOCASE,
+    description TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (tenant_id, name)
+  );
+
+  -- ===== Protocolos & Demandas =====
+  -- "data" holds the full client-side Protocol object (minus timeline); columns hold what the server
+  -- queries or exposes publicly. Numbers are sequential per tenant and year (PRT-2026-00001).
+  CREATE TABLE IF NOT EXISTS protocols (
+    id           TEXT PRIMARY KEY,
+    tenant_id    TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    number       TEXT NOT NULL,
+    year         INTEGER NOT NULL,
+    seq          INTEGER NOT NULL,
+    source       TEXT NOT NULL DEFAULT 'interno',  -- interno | web
+    status       TEXT NOT NULL DEFAULT 'novo',
+    theme        TEXT NOT NULL DEFAULT '',
+    city         TEXT NOT NULL DEFAULT '',
+    phone_last4  TEXT NOT NULL DEFAULT '',
+    data         TEXT NOT NULL,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (tenant_id, number),
+    UNIQUE (tenant_id, year, seq)
+  );
+  CREATE INDEX IF NOT EXISTS idx_protocols_tenant ON protocols(tenant_id, created_at);
+  -- Append-only timeline. visibility: internal (equipe) | public (cidadão) | both.
+  CREATE TABLE IF NOT EXISTS protocol_events (
+    id          TEXT PRIMARY KEY,
+    protocol_id TEXT NOT NULL REFERENCES protocols(id) ON DELETE CASCADE,
+    tenant_id   TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    client_id   TEXT,
+    at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    author      TEXT NOT NULL DEFAULT '',
+    role        TEXT NOT NULL DEFAULT '',
+    action      TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    badge       TEXT,
+    visibility  TEXT NOT NULL DEFAULT 'internal',
+    UNIQUE (protocol_id, client_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_protocol_events ON protocol_events(protocol_id, at);
+
+  -- Fila de e-mails transacionais (Resend). Gravada na mesma transação do evento que a origina;
+  -- um worker envia e reenvia com backoff. status: pending | sent | failed
+  CREATE TABLE IF NOT EXISTS email_outbox (
+    id           TEXT PRIMARY KEY,
+    tenant_id    TEXT REFERENCES tenants(id) ON DELETE CASCADE,
+    to_email     TEXT NOT NULL,
+    subject      TEXT NOT NULL,
+    html         TEXT NOT NULL,
+    text         TEXT NOT NULL,
+    kind         TEXT NOT NULL DEFAULT '',
+    ref          TEXT,
+    status       TEXT NOT NULL DEFAULT 'pending',
+    attempts     INTEGER NOT NULL DEFAULT 0,
+    next_try_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    last_error   TEXT,
+    provider_id  TEXT,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    sent_at      TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_email_outbox_pending ON email_outbox(status, next_try_at);
+
+  -- Temas de demanda (Saúde, Educação...) usados em Protocolos › Novo Protocolo.
+  CREATE TABLE IF NOT EXISTS demand_themes (
+    id          TEXT PRIMARY KEY,
+    tenant_id   TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL COLLATE NOCASE,
+    description TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (tenant_id, name)
+  );
+
   -- Tipos de proposição/documento (Ofício, Requerimento, Projeto de Lei...) used by "Documentos do Gabinete".
   CREATE TABLE IF NOT EXISTS proposition_types (
     id          TEXT PRIMARY KEY,
@@ -270,6 +349,12 @@ if (!tenantCols.some((c) => c.name === 'taxonomy_seeded')) {
 }
 if (!tenantCols.some((c) => c.name === 'proposition_types_seeded')) {
   db.exec(`ALTER TABLE tenants ADD COLUMN proposition_types_seeded INTEGER NOT NULL DEFAULT 0`);
+}
+if (!tenantCols.some((c) => c.name === 'demand_themes_seeded')) {
+  db.exec(`ALTER TABLE tenants ADD COLUMN demand_themes_seeded INTEGER NOT NULL DEFAULT 0`);
+}
+if (!tenantCols.some((c) => c.name === 'entry_channels_seeded')) {
+  db.exec(`ALTER TABLE tenants ADD COLUMN entry_channels_seeded INTEGER NOT NULL DEFAULT 0`);
 }
 
 export function audit(entry: {
