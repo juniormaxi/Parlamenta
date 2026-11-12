@@ -53,10 +53,10 @@ export function validatePasswordStrength(pw: unknown): string | null {
 // ---------- sessions ----------
 const sha256 = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
 
-export function createSession(userId: string, req: Request, res: Response) {
+export async function createSession(userId: string, req: Request, res: Response) {
   const token = crypto.randomBytes(32).toString('base64url');
   const expires = new Date(Date.now() + SESSION_TTL_HOURS * 3600_000);
-  db.prepare(
+  await db.prepare(
     `INSERT INTO sessions (token_hash, user_id, expires_at, ip, user_agent) VALUES (?, ?, ?, ?, ?)`
   ).run(sha256(token), userId, expires.toISOString(), req.ip ?? null, String(req.headers['user-agent'] ?? '').slice(0, 200));
   res.cookie(SESSION_COOKIE, token, {
@@ -68,18 +68,18 @@ export function createSession(userId: string, req: Request, res: Response) {
   });
 }
 
-export function destroySession(req: Request, res: Response) {
+export async function destroySession(req: Request, res: Response) {
   const token = req.cookies?.[SESSION_COOKIE];
-  if (token) db.prepare(`DELETE FROM sessions WHERE token_hash = ?`).run(sha256(token));
+  if (token) await db.prepare(`DELETE FROM sessions WHERE token_hash = ?`).run(sha256(token));
   res.clearCookie(SESSION_COOKIE, { path: '/api' });
 }
 
-export function revokeUserSessions(userId: string) {
-  db.prepare(`DELETE FROM sessions WHERE user_id = ?`).run(userId);
+export async function revokeUserSessions(userId: string) {
+  await db.prepare(`DELETE FROM sessions WHERE user_id = ?`).run(userId);
 }
 
-export function revokeTenantSessions(tenantId: string) {
-  db.prepare(`DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE tenant_id = ?)`).run(tenantId);
+export async function revokeTenantSessions(tenantId: string) {
+  await db.prepare(`DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE tenant_id = ?)`).run(tenantId);
 }
 
 export interface AuthContext {
@@ -122,10 +122,10 @@ export function parseCookies(req: Request, _res: Response, next: NextFunction) {
  * never from a header, query string or body — so a client cannot pick another tenant.
  * Users of suspended tenants and disabled users are rejected.
  */
-export function loadSession(req: Request, _res: Response, next: NextFunction) {
+export async function loadSession(req: Request, _res: Response, next: NextFunction) {
   const token = req.cookies?.[SESSION_COOKIE];
   if (token) {
-    const row = db
+    const row = await db
       .prepare(
         `SELECT u.id, u.email, u.name, u.role, u.tenant_id, u.status AS user_status,
                 t.status AS tenant_status, s.expires_at
@@ -149,7 +149,7 @@ export function loadSession(req: Request, _res: Response, next: NextFunction) {
         tenantId: row.tenant_id,
       };
     } else if (row) {
-      db.prepare(`DELETE FROM sessions WHERE token_hash = ?`).run(sha256(token));
+      await db.prepare(`DELETE FROM sessions WHERE token_hash = ?`).run(sha256(token));
     }
   }
   next();
@@ -208,13 +208,13 @@ export function clearLoginFailures(keys: string[]) {
   keys.forEach((k) => attempts.delete(k));
 }
 
-export function login(email: string, password: string) {
-  const user = db.prepare(`SELECT * FROM users WHERE email = ?`).get(email) as any;
+export async function login(email: string, password: string) {
+  const user = await db.prepare(`SELECT * FROM users WHERE email = ?`).get(email) as any;
   const ok = verifyPassword(password, user?.password_hash ?? DUMMY_HASH) && !!user;
   if (!ok) return { ok: false as const, reason: 'invalid' };
   if (user.status !== 'active') return { ok: false as const, reason: 'disabled' };
   if (user.tenant_id) {
-    const t = db.prepare(`SELECT status FROM tenants WHERE id = ?`).get(user.tenant_id) as any;
+    const t = await db.prepare(`SELECT status FROM tenants WHERE id = ?`).get(user.tenant_id) as any;
     if (t?.status !== 'active') return { ok: false as const, reason: 'tenant_suspended' };
   }
   return { ok: true as const, user };

@@ -10,7 +10,7 @@
  */
 import crypto from 'node:crypto';
 import express, { type Request } from 'express';
-import { db, audit } from './db';
+import { db, tx, audit } from './db';
 import { HttpError, bad } from './http';
 import { ensureDemandThemes } from './taxonomy';
 import { queueEmail, kickEmailWorker, layout, esc, appUrl } from './mailer';
@@ -36,13 +36,13 @@ const digits = (s: unknown) => String(s ?? '').replace(/\D/g, '');
 const text = (v: unknown, max: number) => String(v ?? '').trim().slice(0, max);
 
 type Visibility = 'internal' | 'public' | 'both';
-function addEvent(
+async function addEvent(
   p: { id: string; tenantId: string },
   e: { action: string; description?: string; author?: string; role?: string; badge?: string | null; visibility: Visibility; clientId?: string; at?: string }
 ) {
-  db.prepare(
-    `INSERT OR IGNORE INTO protocol_events (id, protocol_id, tenant_id, client_id, at, author, role, action, description, badge, visibility)
-     VALUES (?, ?, ?, ?, COALESCE(?, strftime('%Y-%m-%dT%H:%M:%fZ','now')), ?, ?, ?, ?, ?, ?)`
+  await db.prepare(
+    `INSERT INTO protocol_events (id, protocol_id, tenant_id, client_id, at, author, role, action, description, badge, visibility)
+     VALUES (?, ?, ?, ?, COALESCE(?, utc_iso_now()), ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`
   ).run(
     crypto.randomUUID(), p.id, p.tenantId, e.clientId ?? null, e.at ?? null,
     text(e.author, 120), text(e.role, 120), text(e.action, 200), text(e.description, 4000), e.badge ? text(e.badge, 60) : null, e.visibility
@@ -50,9 +50,9 @@ function addEvent(
 }
 
 /** Creates a protocol row with the next sequential number for the tenant/year. Caller wraps in a transaction. */
-function insertProtocol(tenantId: string, source: 'interno' | 'web', data: Record<string, any>) {
+async function insertProtocol(tenantId: string, source: 'interno' | 'web', data: Record<string, any>) {
   const year = new Date().getFullYear();
-  const row = db.prepare(`SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM protocols WHERE tenant_id = ? AND year = ?`).get(tenantId, year) as any;
+  const row = await db.prepare(`SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM protocols WHERE tenant_id = ? AND year = ?`).get(tenantId, year) as any;
   const seq = Number(row.n);
   const number = `PRT-${year}-${String(seq).padStart(5, '0')}`;
   const id = crypto.randomUUID();
@@ -62,7 +62,7 @@ function insertProtocol(tenantId: string, source: 'interno' | 'web', data: Recor
   const full: Record<string, any> = { ...data, priority, number, createdAt, deadline, status: 'novo' };
   delete full.timeline;
   delete full.id;
-  db.prepare(
+  await db.prepare(
     `INSERT INTO protocols (id, tenant_id, number, year, seq, source, status, theme, city, phone_last4, data, created_at)
      VALUES (?, ?, ?, ?, ?, ?, 'novo', ?, ?, ?, ?, ?)`
   ).run(id, tenantId, number, year, seq, source, text(full.theme, 60), text(full.citizenCity, 120), digits(full.citizenPhone).slice(-4), JSON.stringify(full), createdAt);
@@ -74,10 +74,10 @@ function insertProtocol(tenantId: string, source: 'interno' | 'web', data: Recor
 // ---------------------------------------------------------------------------
 type Notice = { kind: 'opened' } | { kind: 'status'; status: string } | { kind: 'response'; status: string; text: string };
 
-function notifyCitizen(tenantId: string, protocol: { number: string; data: Record<string, any> }, n: Notice) {
+async function notifyCitizen(tenantId: string, protocol: { number: string; data: Record<string, any> }, n: Notice) {
   const to = text(protocol.data.citizenEmail, 200);
   if (!to) return;
-  const t = db.prepare(`SELECT slug, name, parliamentarian FROM tenants WHERE id = ?`).get(tenantId) as any;
+  const t = await db.prepare(`SELECT slug, name, parliamentarian FROM tenants WHERE id = ?`).get(tenantId) as any;
   if (!t) return;
   const cabinet = t.parliamentarian || t.name;
   const url = `${appUrl()}/site/${t.slug}?protocolo=${encodeURIComponent(protocol.number)}`;
@@ -107,7 +107,7 @@ function notifyCitizen(tenantId: string, protocol: { number: string; data: Recor
     body = `<div style="font-size:14px;line-height:1.6;white-space:pre-line;border-left:3px solid #36B7A5;padding:4px 0 4px 12px;margin:0 0 16px">${esc(n.text)}</div>${summary}`;
     plain = `Olá, ${protocol.data.citizenName}. Resposta do gabinete para o protocolo ${protocol.number}:\n\n${n.text}\n\nAcompanhe em ${url}`;
   }
-  queueEmail({
+  await queueEmail({
     tenantId,
     to,
     subject,
@@ -118,14 +118,14 @@ function notifyCitizen(tenantId: string, protocol: { number: string; data: Recor
   });
 }
 
-function eventsFor(protocolId: string, who: 'team' | 'citizen') {
+async function eventsFor(protocolId: string, who: 'team' | 'citizen') {
   const vis = who === 'team' ? `('internal','both')` : `('public','both')`;
-  return db
-    .prepare(`SELECT * FROM protocol_events WHERE protocol_id = ? AND visibility IN ${vis} ORDER BY at, rowid`)
+  return await db
+    .prepare(`SELECT * FROM protocol_events WHERE protocol_id = ? AND visibility IN ${vis} ORDER BY at, pos`)
     .all(protocolId) as any[];
 }
 
-function toClient(row: any) {
+async function toClient(row: any) {
   const data = JSON.parse(row.data);
   return {
     ...data,
@@ -137,7 +137,7 @@ function toClient(row: any) {
     persisted: true,
     attachments: data.attachments ?? [],
     tags: data.tags ?? [],
-    timeline: eventsFor(row.id, 'team').map((e) => ({
+    timeline: (await eventsFor(row.id, 'team')).map((e) => ({
       id: e.client_id ?? e.id,
       timestamp: new Date(e.at).toLocaleString('pt-BR', { timeZone: 'America/Cuiaba' }),
       author: e.author,
@@ -149,17 +149,6 @@ function toClient(row: any) {
   };
 }
 
-function transaction<T>(fn: () => T): T {
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    const r = fn();
-    db.exec('COMMIT');
-    return r;
-  } catch (e) {
-    db.exec('ROLLBACK');
-    throw e;
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Equipe do gabinete — /api/tenant/protocols
@@ -178,17 +167,17 @@ function cleanBody(body: any) {
   return data;
 }
 
-tenantProtocolsRouter.get('/', (req, res) => {
-  const rows = db.prepare(`SELECT * FROM protocols WHERE tenant_id = ? ORDER BY created_at DESC`).all(tid(req));
-  res.json(rows.map(toClient));
+tenantProtocolsRouter.get('/', async (req, res) => {
+  const rows = await db.prepare(`SELECT * FROM protocols WHERE tenant_id = ? ORDER BY created_at DESC`).all(tid(req));
+  res.json(await Promise.all(rows.map(toClient)));
 });
 
-tenantProtocolsRouter.post('/', (req, res) => {
+tenantProtocolsRouter.post('/', async (req, res) => {
   const data = cleanBody(req.body);
   if (!text(data.citizenName, 200) || !text(data.subject, 300)) throw bad('Informe o nome do cidadão e o assunto.');
-  const created = transaction(() => {
-    const p = insertProtocol(tid(req), 'interno', { ...data, tags: Array.isArray(data.tags) ? data.tags : [] });
-    addEvent(
+  const created = await tx(async () => {
+    const p = await insertProtocol(tid(req), 'interno', { ...data, tags: Array.isArray(data.tags) ? data.tags : [] });
+    await addEvent(
       { id: p.id, tenantId: tid(req) },
       {
         action: 'Abertura de Protocolo Oficial',
@@ -198,16 +187,16 @@ tenantProtocolsRouter.post('/', (req, res) => {
         visibility: 'both',
       }
     );
-    notifyCitizen(tid(req), { number: p.number, data }, { kind: 'opened' });
+    await notifyCitizen(tid(req), { number: p.number, data }, { kind: 'opened' });
     return p;
   });
   kickEmailWorker();
-  audit({ ...actor(req), action: 'protocol.created', target: created.number });
-  res.status(201).json(toClient(db.prepare(`SELECT * FROM protocols WHERE id = ?`).get(created.id)));
+  await audit({ ...actor(req), action: 'protocol.created', target: created.number });
+  res.status(201).json(await toClient(await db.prepare(`SELECT * FROM protocols WHERE id = ?`).get(created.id)));
 });
 
-tenantProtocolsRouter.patch('/:id', (req, res) => {
-  const cur = db.prepare(`SELECT * FROM protocols WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
+tenantProtocolsRouter.patch('/:id', async (req, res) => {
+  const cur = await db.prepare(`SELECT * FROM protocols WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
   if (!cur) throw new HttpError(404, 'Protocolo não encontrado.');
   const incoming = cleanBody(req.body);
   const timeline: any[] = Array.isArray(req.body.timeline) ? req.body.timeline.slice(-500) : [];
@@ -216,35 +205,35 @@ tenantProtocolsRouter.patch('/:id', (req, res) => {
   // Immutable fields stay as the server created them.
   const next = { ...prev, ...incoming, id: undefined, number: cur.number, createdAt: prev.createdAt, status };
 
-  transaction(() => {
-    db.prepare(`UPDATE protocols SET status = ?, theme = ?, city = ?, phone_last4 = ?, data = ?, updated_at = datetime('now') WHERE id = ?`).run(
+  await tx(async () => {
+    await db.prepare(`UPDATE protocols SET status = ?, theme = ?, city = ?, phone_last4 = ?, data = ?, updated_at = datetime('now') WHERE id = ?`).run(
       status, text(next.theme, 60), text(next.citizenCity, 120), digits(next.citizenPhone).slice(-4), JSON.stringify(next), cur.id
     );
     const ref = { id: cur.id, tenantId: tid(req) };
     // Timeline is append-only: only events the server has not seen are stored.
     const known = new Set(
-      (db.prepare(`SELECT id, client_id FROM protocol_events WHERE protocol_id = ?`).all(cur.id) as any[]).flatMap((r) => [r.id, r.client_id])
+      (await db.prepare(`SELECT id, client_id FROM protocol_events WHERE protocol_id = ?`).all(cur.id) as any[]).flatMap((r) => [r.id, r.client_id])
     );
     for (const e of timeline) {
       const cid = text(e?.id, 100);
       if (!cid || known.has(cid) || !text(e?.action, 200)) continue;
-      addEvent(ref, { clientId: cid, action: e.action, description: e.description, author: e.author, role: e.role, badge: e.badge, visibility: 'internal' });
+      await addEvent(ref, { clientId: cid, action: e.action, description: e.description, author: e.author, role: e.role, badge: e.badge, visibility: 'internal' });
     }
     const responded = next.citizenFeedbackStatus === 'enviada_sucesso' && prev.citizenFeedbackStatus !== 'enviada_sucesso';
     if (status !== cur.status) {
-      addEvent(ref, { action: `Status: ${STATUS_LABEL[status]}`, description: '', visibility: 'public' });
+      await addEvent(ref, { action: `Status: ${STATUS_LABEL[status]}`, description: '', visibility: 'public' });
     }
     if (responded) {
-      addEvent(ref, { action: 'Resposta do gabinete', description: text(next.citizenFeedbackText, 4000), visibility: 'public' });
+      await addEvent(ref, { action: 'Resposta do gabinete', description: text(next.citizenFeedbackText, 4000), visibility: 'public' });
     }
     // One e-mail per save: the response (which shows the current status) wins over a bare status change.
     const p = { number: cur.number, data: next };
-    if (responded) notifyCitizen(tid(req), p, { kind: 'response', status, text: text(next.citizenFeedbackText, 4000) });
-    else if (status !== cur.status) notifyCitizen(tid(req), p, { kind: 'status', status });
+    if (responded) await notifyCitizen(tid(req), p, { kind: 'response', status, text: text(next.citizenFeedbackText, 4000) });
+    else if (status !== cur.status) await notifyCitizen(tid(req), p, { kind: 'status', status });
   });
   kickEmailWorker();
-  if (status !== cur.status) audit({ ...actor(req), action: 'protocol.status_changed', target: cur.number, details: { from: cur.status, to: status } });
-  res.json(toClient(db.prepare(`SELECT * FROM protocols WHERE id = ?`).get(cur.id)));
+  if (status !== cur.status) await audit({ ...actor(req), action: 'protocol.status_changed', target: cur.number, details: { from: cur.status, to: status } });
+  res.json(await toClient(await db.prepare(`SELECT * FROM protocols WHERE id = ?`).get(cur.id)));
 });
 
 // ---------------------------------------------------------------------------
@@ -264,21 +253,21 @@ function rateLimit(key: string, max: number, windowMs: number) {
   if (++b.n > max) throw new HttpError(429, 'Muitas tentativas. Aguarde alguns minutos e tente novamente.');
 }
 
-function siteTenant(slug: string) {
-  const t = db.prepare(`SELECT * FROM tenants WHERE slug = ? AND status = 'active'`).get(String(slug).toLowerCase()) as any;
+async function siteTenant(slug: string) {
+  const t = await db.prepare(`SELECT * FROM tenants WHERE slug = ? AND status = 'active'`).get(String(slug).toLowerCase()) as any;
   if (!t) throw new HttpError(404, 'Gabinete não encontrado.');
   return t;
 }
 
-publicRouter.get('/sites/:slug', (req, res) => {
-  const t = siteTenant(req.params.slug);
-  ensureDemandThemes(t.id);
-  const themes = (db.prepare(`SELECT name FROM demand_themes WHERE tenant_id = ? ORDER BY name COLLATE NOCASE`).all(t.id) as any[]).map((r) => r.name);
+publicRouter.get('/sites/:slug', async (req, res) => {
+  const t = await siteTenant(req.params.slug);
+  await ensureDemandThemes(t.id);
+  const themes = (await db.prepare(`SELECT name FROM demand_themes WHERE tenant_id = ? ORDER BY lower(name)`).all(t.id) as any[]).map((r) => r.name);
   res.json({ name: t.name, parliamentarian: t.parliamentarian, house: t.house, state: t.state, themes });
 });
 
-publicRouter.post('/sites/:slug/protocols', (req, res) => {
-  const t = siteTenant(req.params.slug);
+publicRouter.post('/sites/:slug/protocols', async (req, res) => {
+  const t = await siteTenant(req.params.slug);
   rateLimit(`web-open:${req.ip}`, 5, 60 * 60 * 1000);
   const b = req.body ?? {};
   // Honeypot: bots fill every field; people never see this one.
@@ -294,12 +283,12 @@ publicRouter.post('/sites/:slug/protocols', (req, res) => {
   if (!name || !city || !subject || !description) throw bad('Preencha nome, município, assunto e detalhamento.');
   if (digits(phone).length < 10) throw bad('Informe um telefone com DDD.');
   if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw bad('E-mail inválido.');
-  ensureDemandThemes(t.id);
-  const canonTheme = (db.prepare(`SELECT name FROM demand_themes WHERE tenant_id = ? AND name = ?`).get(t.id, theme) as any)?.name;
+  await ensureDemandThemes(t.id);
+  const canonTheme = (await db.prepare(`SELECT name FROM demand_themes WHERE tenant_id = ? AND name = ?`).get(t.id, theme) as any)?.name;
   if (!canonTheme) throw bad('Selecione um tema da lista.');
 
-  const created = transaction(() => {
-    const p = insertProtocol(t.id, 'web', {
+  const created = await tx(async () => {
+    const p = await insertProtocol(t.id, 'web', {
       citizenName: name,
       citizenCity: city,
       citizenPhone: phone,
@@ -323,7 +312,7 @@ publicRouter.post('/sites/:slug/protocols', (req, res) => {
       citizenFeedbackStatus: 'pendente',
       lgpdConsentAt: new Date().toISOString(),
     });
-    addEvent(
+    await addEvent(
       { id: p.id, tenantId: t.id },
       {
         action: 'Demanda recebida pelo site',
@@ -334,23 +323,23 @@ publicRouter.post('/sites/:slug/protocols', (req, res) => {
         visibility: 'both',
       }
     );
-    notifyCitizen(t.id, { number: p.number, data: { citizenName: name, citizenEmail: email, subject } }, { kind: 'opened' });
+    await notifyCitizen(t.id, { number: p.number, data: { citizenName: name, citizenEmail: email, subject } }, { kind: 'opened' });
     return p;
   });
   kickEmailWorker();
-  audit({ tenantId: t.id, action: 'protocol.created_web', target: created.number, ip: req.ip });
+  await audit({ tenantId: t.id, action: 'protocol.created_web', target: created.number, ip: req.ip });
   res.status(201).json({ number: created.number });
 });
 
-publicRouter.post('/sites/:slug/consulta', (req, res) => {
-  const t = siteTenant(req.params.slug);
+publicRouter.post('/sites/:slug/consulta', async (req, res) => {
+  const t = await siteTenant(req.params.slug);
   const number = text(req.body?.number, 40).toUpperCase();
   const last4 = digits(req.body?.phoneLast4).slice(-4);
   rateLimit(`web-track-ip:${req.ip}`, 20, 15 * 60 * 1000);
   rateLimit(`web-track-num:${t.id}:${number}`, 10, 15 * 60 * 1000);
   const notFound = new HttpError(404, 'Protocolo não encontrado. Confira o número e os 4 últimos dígitos do telefone informado na abertura.');
   if (!number || last4.length !== 4) throw notFound;
-  const row = db.prepare(`SELECT * FROM protocols WHERE tenant_id = ? AND number = ?`).get(t.id, number) as any;
+  const row = await db.prepare(`SELECT * FROM protocols WHERE tenant_id = ? AND number = ?`).get(t.id, number) as any;
   if (!row || !row.phone_last4 || !crypto.timingSafeEqual(Buffer.from(row.phone_last4.padStart(4, '0')), Buffer.from(last4))) throw notFound;
   const data = JSON.parse(row.data);
   res.json({
@@ -361,6 +350,6 @@ publicRouter.post('/sites/:slug/consulta', (req, res) => {
     city: row.city,
     subject: data.subject ?? '',
     createdAt: data.createdAt ?? row.created_at,
-    events: eventsFor(row.id, 'citizen').map((e) => ({ at: e.at, action: e.action, description: e.description })),
+    events: (await eventsFor(row.id, 'citizen')).map((e) => ({ at: e.at, action: e.action, description: e.description })),
   });
 });

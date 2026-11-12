@@ -1,7 +1,7 @@
 /**
  * E-mails transacionais via Resend (https://resend.com/docs/api-reference/emails/send-email).
  *
- * Fluxo: queueEmail() grava em email_outbox dentro da transação do evento (ex.: mudança de status);
+ * Fluxo: await queueEmail() grava em email_outbox dentro da transação do evento (ex.: mudança de status);
  * startEmailWorker() envia os pendentes e reenvia falhas com backoff (até MAX_ATTEMPTS).
  * Sem RESEND_API_KEY os e-mails ficam na fila (status pending) e são enviados quando a chave for configurada.
  *
@@ -20,18 +20,18 @@ export const appUrl = () => (process.env.APP_URL && !process.env.APP_URL.startsW
 export const esc = (s: unknown) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
-export function queueEmail(e: { tenantId: string | null; to: string; subject: string; html: string; text: string; kind: string; ref?: string }) {
+export async function queueEmail(e: { tenantId: string | null; to: string; subject: string; html: string; text: string; kind: string; ref?: string }) {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e.to)) return;
-  db.prepare(
+  await db.prepare(
     `INSERT INTO email_outbox (id, tenant_id, to_email, subject, html, text, kind, ref) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(crypto.randomUUID(), e.tenantId, e.to.trim().toLowerCase(), e.subject.slice(0, 200), e.html, e.text, e.kind, e.ref ?? null);
 }
 
 /** Display name for the From header: the cabinet's name, stripped of characters that break the header. */
-function fromHeader(tenantId: string | null) {
+async function fromHeader(tenantId: string | null) {
   const addr = process.env.RESEND_FROM_EMAIL!;
   if (addr.includes('<')) return addr; // already "Nome <email>"
-  const t = tenantId ? (db.prepare(`SELECT name, parliamentarian FROM tenants WHERE id = ?`).get(tenantId) as any) : null;
+  const t = tenantId ? (await db.prepare(`SELECT name, parliamentarian FROM tenants WHERE id = ?`).get(tenantId) as any) : null;
   const name = String(t?.parliamentarian || t?.name || 'Parlamenta').replace(/["<>\r\n]/g, '').slice(0, 80);
   return `${name} <${addr}>`;
 }
@@ -45,7 +45,7 @@ async function sendOne(row: any) {
       // Resend deduplicates retries with the same key for 24h.
       'Idempotency-Key': row.id,
     },
-    body: JSON.stringify({ from: fromHeader(row.tenant_id), to: [row.to_email], subject: row.subject, html: row.html, text: row.text }),
+    body: JSON.stringify({ from: await fromHeader(row.tenant_id), to: [row.to_email], subject: row.subject, html: row.html, text: row.text }),
     signal: AbortSignal.timeout(15_000),
   });
   const body: any = await res.json().catch(() => ({}));
@@ -63,21 +63,21 @@ async function tick() {
   if (running || !mailConfigured()) return;
   running = true;
   try {
-    const rows = db
+    const rows = await db
       .prepare(`SELECT * FROM email_outbox WHERE status = 'pending' AND next_try_at <= datetime('now') ORDER BY created_at LIMIT ?`)
       .all(BATCH) as any[];
     for (const row of rows) {
       try {
         const id = await sendOne(row);
-        db.prepare(`UPDATE email_outbox SET status = 'sent', provider_id = ?, sent_at = datetime('now'), attempts = attempts + 1, last_error = NULL WHERE id = ?`).run(id, row.id);
+        await db.prepare(`UPDATE email_outbox SET status = 'sent', provider_id = ?, sent_at = datetime('now'), attempts = attempts + 1, last_error = NULL WHERE id = ?`).run(id, row.id);
       } catch (e) {
         const attempts = row.attempts + 1;
         const failed = (e as any).permanent || attempts >= MAX_ATTEMPTS;
         const delayMin = Math.min(60, 2 ** attempts); // 2, 4, 8, 16, 32, 60 min
-        db.prepare(
+        await db.prepare(
           `UPDATE email_outbox SET attempts = ?, last_error = ?, status = ?, next_try_at = datetime('now', ?) WHERE id = ?`
         ).run(attempts, String((e as Error).message).slice(0, 500), failed ? 'failed' : 'pending', `+${delayMin} minutes`, row.id);
-        if (failed) audit({ tenantId: row.tenant_id, action: 'email.failed', target: row.kind, details: { ref: row.ref, error: String((e as Error).message).slice(0, 200) } });
+        if (failed) await audit({ tenantId: row.tenant_id, action: 'email.failed', target: row.kind, details: { ref: row.ref, error: String((e as Error).message).slice(0, 200) } });
       }
     }
   } finally {

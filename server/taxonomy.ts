@@ -4,7 +4,7 @@
  */
 import crypto from 'node:crypto';
 import express, { type Request } from 'express';
-import { db, audit } from './db';
+import { db, tx, audit } from './db';
 import { HttpError, bad } from './http';
 
 export const TAG_COLORS = ['teal', 'navy', 'emerald', 'amber', 'rose', 'violet', 'sky', 'slate'] as const;
@@ -69,84 +69,69 @@ const DEMAND_THEMES: SimpleList = {
   ],
 };
 
-function ensureSimpleList(list: SimpleList, tenantId: string) {
-  const t = db.prepare(`SELECT ${list.seededCol} AS v FROM tenants WHERE id = ?`).get(tenantId) as any;
+async function ensureSimpleList(list: SimpleList, tenantId: string) {
+  const t = await db.prepare(`SELECT ${list.seededCol} AS v FROM tenants WHERE id = ?`).get(tenantId) as any;
   const target = Math.max(...list.defaults.map((d) => d[2]));
   if (!t || t.v >= target) return;
-  const ins = db.prepare(`INSERT OR IGNORE INTO ${list.table} (id, tenant_id, name, description) VALUES (?, ?, ?, ?)`);
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    for (const [n, d, v] of list.defaults) if (v > t.v) ins.run(crypto.randomUUID(), tenantId, n, d);
-    db.prepare(`UPDATE tenants SET ${list.seededCol} = ? WHERE id = ?`).run(target, tenantId);
-    db.exec('COMMIT');
-  } catch (e) {
-    db.exec('ROLLBACK');
-    throw e;
-  }
+  const ins = db.prepare(`INSERT INTO ${list.table} (id, tenant_id, name, description) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING`);
+  await tx(async () => {
+    for (const [n, d, v] of list.defaults) if (v > t.v) await ins.run(crypto.randomUUID(), tenantId, n, d);
+    await db.prepare(`UPDATE tenants SET ${list.seededCol} = ? WHERE id = ?`).run(target, tenantId);
+  });
 }
 export const ensureEntryChannels = (tenantId: string) => ensureSimpleList(ENTRY_CHANNELS, tenantId);
 export const ensureDemandThemes = (tenantId: string) => ensureSimpleList(DEMAND_THEMES, tenantId);
 
-export function ensurePropositionTypes(tenantId: string) {
-  const t = db.prepare(`SELECT proposition_types_seeded FROM tenants WHERE id = ?`).get(tenantId) as any;
+export async function ensurePropositionTypes(tenantId: string) {
+  const t = await db.prepare(`SELECT proposition_types_seeded FROM tenants WHERE id = ?`).get(tenantId) as any;
   if (!t || t.proposition_types_seeded) return;
-  const ins = db.prepare(`INSERT OR IGNORE INTO proposition_types (id, tenant_id, name, acronym, description) VALUES (?, ?, ?, ?, ?)`);
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    for (const [n, a, d] of DEFAULT_PROPOSITION_TYPES) ins.run(crypto.randomUUID(), tenantId, n, a, d);
-    db.prepare(`UPDATE tenants SET proposition_types_seeded = 1 WHERE id = ?`).run(tenantId);
-    db.exec('COMMIT');
-  } catch (e) {
-    db.exec('ROLLBACK');
-    throw e;
-  }
+  const ins = db.prepare(`INSERT INTO proposition_types (id, tenant_id, name, acronym, description) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`);
+  await tx(async () => {
+    for (const [n, a, d] of DEFAULT_PROPOSITION_TYPES) await ins.run(crypto.randomUUID(), tenantId, n, a, d);
+    await db.prepare(`UPDATE tenants SET proposition_types_seeded = 1 WHERE id = ?`).run(tenantId);
+  });
 }
 
 /**
  * Creates the defaults once per tenant, plus any category/tag already used by existing contacts,
  * so older data stays valid under the new controlled vocabulary.
  */
-export function ensureTaxonomy(tenantId: string) {
-  const t = db.prepare(`SELECT taxonomy_seeded FROM tenants WHERE id = ?`).get(tenantId) as any;
+export async function ensureTaxonomy(tenantId: string) {
+  const t = await db.prepare(`SELECT taxonomy_seeded FROM tenants WHERE id = ?`).get(tenantId) as any;
   if (!t || t.taxonomy_seeded) return;
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    const insCat = db.prepare(`INSERT OR IGNORE INTO contact_categories (id, tenant_id, name, description) VALUES (?, ?, ?, ?)`);
-    const insTag = db.prepare(`INSERT OR IGNORE INTO contact_tags (id, tenant_id, name, color) VALUES (?, ?, ?, ?)`);
-    for (const [n, d] of DEFAULT_CATEGORIES) insCat.run(crypto.randomUUID(), tenantId, n, d);
-    for (const [n, c] of DEFAULT_TAGS) insTag.run(crypto.randomUUID(), tenantId, n, c);
-    for (const r of db.prepare(`SELECT DISTINCT category FROM contacts WHERE tenant_id = ? AND category <> ''`).all(tenantId) as any[]) {
-      insCat.run(crypto.randomUUID(), tenantId, r.category, '');
+  await tx(async () => {
+    const insCat = db.prepare(`INSERT INTO contact_categories (id, tenant_id, name, description) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING`);
+    const insTag = db.prepare(`INSERT INTO contact_tags (id, tenant_id, name, color) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING`);
+    for (const [n, d] of DEFAULT_CATEGORIES) await insCat.run(crypto.randomUUID(), tenantId, n, d);
+    for (const [n, c] of DEFAULT_TAGS) await insTag.run(crypto.randomUUID(), tenantId, n, c);
+    for (const r of await db.prepare(`SELECT DISTINCT category FROM contacts WHERE tenant_id = ? AND category <> ''`).all(tenantId) as any[]) {
+      await insCat.run(crypto.randomUUID(), tenantId, r.category, '');
     }
-    for (const r of db.prepare(`SELECT DISTINCT j.value AS v FROM contacts c, json_each(c.tags) j WHERE c.tenant_id = ?`).all(tenantId) as any[]) {
-      insTag.run(crypto.randomUUID(), tenantId, r.v, 'teal');
+    for (const r of await db.prepare(`SELECT DISTINCT j.value AS v FROM contacts c, json_each(c.tags) j WHERE c.tenant_id = ?`).all(tenantId) as any[]) {
+      await insTag.run(crypto.randomUUID(), tenantId, r.v, 'teal');
     }
-    db.prepare(`UPDATE tenants SET taxonomy_seeded = 1 WHERE id = ?`).run(tenantId);
-    db.exec('COMMIT');
-  } catch (e) {
-    db.exec('ROLLBACK');
-    throw e;
-  }
+    await db.prepare(`UPDATE tenants SET taxonomy_seeded = 1 WHERE id = ?`).run(tenantId);
+  });
 }
 
 const key = (s: string) => s.trim().toLocaleLowerCase('pt-BR');
 
 /** name (lowercased) -> canonical name */
-export function categoryMap(tenantId: string): Map<string, string> {
-  ensureTaxonomy(tenantId);
-  const rows = db.prepare(`SELECT name FROM contact_categories WHERE tenant_id = ?`).all(tenantId) as { name: string }[];
+export async function categoryMap(tenantId: string): Promise<Map<string, string>> {
+  await ensureTaxonomy(tenantId);
+  const rows = await db.prepare(`SELECT name FROM contact_categories WHERE tenant_id = ?`).all(tenantId) as { name: string }[];
   return new Map(rows.map((r) => [key(r.name), r.name]));
 }
-export function tagMap(tenantId: string): Map<string, string> {
-  ensureTaxonomy(tenantId);
-  const rows = db.prepare(`SELECT name FROM contact_tags WHERE tenant_id = ?`).all(tenantId) as { name: string }[];
+export async function tagMap(tenantId: string): Promise<Map<string, string>> {
+  await ensureTaxonomy(tenantId);
+  const rows = await db.prepare(`SELECT name FROM contact_tags WHERE tenant_id = ?`).all(tenantId) as { name: string }[];
   return new Map(rows.map((r) => [key(r.name), r.name]));
 }
 
 /** Validates a contact's category and tags against the tenant's vocabularies; returns canonical names. */
-export function resolveTaxonomy(tenantId: string, category: string, tags: string[]) {
-  const cats = categoryMap(tenantId);
-  const tagsM = tagMap(tenantId);
+export async function resolveTaxonomy(tenantId: string, category: string, tags: string[]) {
+  const cats = await categoryMap(tenantId);
+  const tagsM = await tagMap(tenantId);
   let canonicalCategory = '';
   if (category.trim()) {
     const c = cats.get(key(category));
@@ -159,11 +144,11 @@ export function resolveTaxonomy(tenantId: string, category: string, tags: string
   return { category: canonicalCategory, tags: canonicalTags };
 }
 
-export function createCategoryIfMissing(tenantId: string, name: string) {
-  db.prepare(`INSERT OR IGNORE INTO contact_categories (id, tenant_id, name) VALUES (?, ?, ?)`).run(crypto.randomUUID(), tenantId, name.trim().slice(0, 60));
+export async function createCategoryIfMissing(tenantId: string, name: string) {
+  await db.prepare(`INSERT INTO contact_categories (id, tenant_id, name) VALUES (?, ?, ?) ON CONFLICT DO NOTHING`).run(crypto.randomUUID(), tenantId, name.trim().slice(0, 60));
 }
-export function createTagIfMissing(tenantId: string, name: string) {
-  db.prepare(`INSERT OR IGNORE INTO contact_tags (id, tenant_id, name, color) VALUES (?, ?, ?, 'teal')`).run(crypto.randomUUID(), tenantId, name.trim().slice(0, 40));
+export async function createTagIfMissing(tenantId: string, name: string) {
+  await db.prepare(`INSERT INTO contact_tags (id, tenant_id, name, color) VALUES (?, ?, ?, 'teal') ON CONFLICT DO NOTHING`).run(crypto.randomUUID(), tenantId, name.trim().slice(0, 40));
 }
 
 // ---------------------------------------------------------------------------
@@ -188,157 +173,137 @@ function cleanName(v: unknown, max: number, what: string) {
 }
 const cleanColor = (v: unknown) => ((TAG_COLORS as readonly string[]).includes(String(v)) ? String(v) : 'teal');
 
-taxonomyRouter.get('/taxonomy', (req, res) => {
-  ensureTaxonomy(tid(req));
-  ensurePropositionTypes(tid(req));
-  ensureEntryChannels(tid(req));
-  ensureDemandThemes(tid(req));
-  const simple = (table: string) =>
-    db.prepare(`SELECT id, name, description, created_at FROM ${table} WHERE tenant_id = ? ORDER BY name COLLATE NOCASE`).all(tid(req));
-  const entryChannels = simple('entry_channels');
-  const demandThemes = simple('demand_themes');
-  const propositionTypes = db
-    .prepare(`SELECT id, name, acronym, description, created_at FROM proposition_types WHERE tenant_id = ? ORDER BY name COLLATE NOCASE`)
+taxonomyRouter.get('/taxonomy', async (req, res) => {
+  await ensureTaxonomy(tid(req));
+  await ensurePropositionTypes(tid(req));
+  await ensureEntryChannels(tid(req));
+  await ensureDemandThemes(tid(req));
+  const simple = async (table: string) =>
+    await db.prepare(`SELECT id, name, description, created_at FROM ${table} WHERE tenant_id = ? ORDER BY lower(name)`).all(tid(req));
+  const entryChannels = await simple('entry_channels');
+  const demandThemes = await simple('demand_themes');
+  const propositionTypes = await db
+    .prepare(`SELECT id, name, acronym, description, created_at FROM proposition_types WHERE tenant_id = ? ORDER BY lower(name)`)
     .all(tid(req));
-  const categories = db
+  const categories = await db
     .prepare(
       `SELECT cc.id, cc.name, cc.description, cc.created_at,
-              (SELECT COUNT(*) FROM contacts c WHERE c.tenant_id = cc.tenant_id AND c.category = cc.name COLLATE NOCASE) AS count
-         FROM contact_categories cc WHERE cc.tenant_id = ? ORDER BY cc.name COLLATE NOCASE`
+              (SELECT COUNT(*) FROM contacts c WHERE c.tenant_id = cc.tenant_id AND lower(c.category) = lower(cc.name)) AS count
+         FROM contact_categories cc WHERE cc.tenant_id = ? ORDER BY lower(cc.name)`
     )
     .all(tid(req));
-  const tags = db
+  const tags = await db
     .prepare(
       `SELECT ct.id, ct.name, ct.color, ct.description, ct.created_at,
               (SELECT COUNT(*) FROM contacts c, json_each(c.tags) j
-                WHERE c.tenant_id = ct.tenant_id AND j.value = ct.name COLLATE NOCASE) AS count
-         FROM contact_tags ct WHERE ct.tenant_id = ? ORDER BY ct.name COLLATE NOCASE`
+                WHERE c.tenant_id = ct.tenant_id AND lower(j.value) = lower(ct.name)) AS count
+         FROM contact_tags ct WHERE ct.tenant_id = ? ORDER BY lower(ct.name)`
     )
     .all(tid(req));
   res.json({ categories, tags, propositionTypes, entryChannels, demandThemes, colors: TAG_COLORS });
 });
 
 // ----- categories -----
-taxonomyRouter.post('/categories', (req, res) => {
+taxonomyRouter.post('/categories', async (req, res) => {
   requireManager(req);
-  ensureTaxonomy(tid(req));
+  await ensureTaxonomy(tid(req));
   const name = cleanName(req.body?.name, 60, 'categoria');
-  if (categoryMap(tid(req)).has(key(name))) throw new HttpError(409, `A categoria "${name}" já existe.`);
+  if ((await categoryMap(tid(req))).has(key(name))) throw new HttpError(409, `A categoria "${name}" já existe.`);
   const id = crypto.randomUUID();
-  db.prepare(`INSERT INTO contact_categories (id, tenant_id, name, description) VALUES (?, ?, ?, ?)`).run(
+  await db.prepare(`INSERT INTO contact_categories (id, tenant_id, name, description) VALUES (?, ?, ?, ?)`).run(
     id, tid(req), name, String(req.body?.description ?? '').trim().slice(0, 200)
   );
-  audit({ ...actor(req), action: 'category.created', target: name });
+  await audit({ ...actor(req), action: 'category.created', target: name });
   res.status(201).json({ id });
 });
 
-taxonomyRouter.patch('/categories/:id', (req, res) => {
+taxonomyRouter.patch('/categories/:id', async (req, res) => {
   requireManager(req);
-  const cur = db.prepare(`SELECT * FROM contact_categories WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
+  const cur = await db.prepare(`SELECT * FROM contact_categories WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
   if (!cur) throw new HttpError(404, 'Categoria não encontrada.');
   const name = req.body?.name === undefined ? cur.name : cleanName(req.body.name, 60, 'categoria');
-  const clash = db.prepare(`SELECT id FROM contact_categories WHERE tenant_id = ? AND name = ? AND id <> ?`).get(tid(req), name, cur.id);
+  const clash = await db.prepare(`SELECT id FROM contact_categories WHERE tenant_id = ? AND name = ? AND id <> ?`).get(tid(req), name, cur.id);
   if (clash) throw new HttpError(409, `A categoria "${name}" já existe.`);
   const description = req.body?.description === undefined ? cur.description : String(req.body.description).trim().slice(0, 200);
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    db.prepare(`UPDATE contact_categories SET name = ?, description = ? WHERE id = ?`).run(name, description, cur.id);
+  await tx(async () => {
+    await db.prepare(`UPDATE contact_categories SET name = ?, description = ? WHERE id = ?`).run(name, description, cur.id);
     if (name !== cur.name) {
-      db.prepare(`UPDATE contacts SET category = ?, updated_at = datetime('now') WHERE tenant_id = ? AND category = ? COLLATE NOCASE`).run(name, tid(req), cur.name);
+      await db.prepare(`UPDATE contacts SET category = ?, updated_at = datetime('now') WHERE tenant_id = ? AND lower(category) = lower(?)`).run(name, tid(req), cur.name);
     }
-    db.exec('COMMIT');
-  } catch (e) {
-    db.exec('ROLLBACK');
-    throw e;
-  }
-  audit({ ...actor(req), action: 'category.updated', target: name, details: name !== cur.name ? { renamedFrom: cur.name } : undefined });
+  });
+  await audit({ ...actor(req), action: 'category.updated', target: name, details: name !== cur.name ? { renamedFrom: cur.name } : undefined });
   res.json({ ok: true });
 });
 
-taxonomyRouter.delete('/categories/:id', (req, res) => {
+taxonomyRouter.delete('/categories/:id', async (req, res) => {
   requireManager(req);
-  const cur = db.prepare(`SELECT * FROM contact_categories WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
+  const cur = await db.prepare(`SELECT * FROM contact_categories WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
   if (!cur) throw new HttpError(404, 'Categoria não encontrada.');
-  db.exec('BEGIN IMMEDIATE');
   let cleared = 0;
-  try {
+  await tx(async () => {
     cleared = Number(
-      db.prepare(`UPDATE contacts SET category = '', updated_at = datetime('now') WHERE tenant_id = ? AND category = ? COLLATE NOCASE`).run(tid(req), cur.name).changes
+      (await db.prepare(`UPDATE contacts SET category = '', updated_at = datetime('now') WHERE tenant_id = ? AND lower(category) = lower(?)`).run(tid(req), cur.name)).changes
     );
-    db.prepare(`DELETE FROM contact_categories WHERE id = ?`).run(cur.id);
-    db.exec('COMMIT');
-  } catch (e) {
-    db.exec('ROLLBACK');
-    throw e;
-  }
-  audit({ ...actor(req), action: 'category.deleted', target: cur.name, details: { contactsCleared: cleared } });
+    await db.prepare(`DELETE FROM contact_categories WHERE id = ?`).run(cur.id);
+  });
+  await audit({ ...actor(req), action: 'category.deleted', target: cur.name, details: { contactsCleared: cleared } });
   res.json({ ok: true, contactsCleared: cleared });
 });
 
 // ----- tags -----
-taxonomyRouter.post('/tags', (req, res) => {
+taxonomyRouter.post('/tags', async (req, res) => {
   requireManager(req);
-  ensureTaxonomy(tid(req));
+  await ensureTaxonomy(tid(req));
   const name = cleanName(req.body?.name, 40, 'etiqueta');
-  if (tagMap(tid(req)).has(key(name))) throw new HttpError(409, `A etiqueta "${name}" já existe.`);
+  if ((await tagMap(tid(req))).has(key(name))) throw new HttpError(409, `A etiqueta "${name}" já existe.`);
   const id = crypto.randomUUID();
-  db.prepare(`INSERT INTO contact_tags (id, tenant_id, name, color, description) VALUES (?, ?, ?, ?, ?)`).run(
+  await db.prepare(`INSERT INTO contact_tags (id, tenant_id, name, color, description) VALUES (?, ?, ?, ?, ?)`).run(
     id, tid(req), name, cleanColor(req.body?.color), String(req.body?.description ?? '').trim().slice(0, 200)
   );
-  audit({ ...actor(req), action: 'tag.created', target: name });
+  await audit({ ...actor(req), action: 'tag.created', target: name });
   res.status(201).json({ id });
 });
 
 /** Rewrites a tag name inside every contact's JSON tag array (or removes it when `to` is null). */
-function rewriteTag(tenantId: string, from: string, to: string | null): number {
-  const rows = db
-    .prepare(`SELECT c.id, c.tags FROM contacts c WHERE c.tenant_id = ? AND EXISTS (SELECT 1 FROM json_each(c.tags) j WHERE j.value = ? COLLATE NOCASE)`)
+async function rewriteTag(tenantId: string, from: string, to: string | null): Promise<number> {
+  const rows = await db
+    .prepare(`SELECT c.id, c.tags FROM contacts c WHERE c.tenant_id = ? AND EXISTS (SELECT 1 FROM json_each(c.tags) j WHERE lower(j.value) = lower(?))`)
     .all(tenantId, from) as { id: string; tags: string }[];
   const upd = db.prepare(`UPDATE contacts SET tags = ?, updated_at = datetime('now') WHERE id = ?`);
   for (const r of rows) {
     const list = (JSON.parse(r.tags) as string[]).flatMap((t) => (key(t) === key(from) ? (to ? [to] : []) : [t]));
-    upd.run(JSON.stringify([...new Set(list)]), r.id);
+    await upd.run(JSON.stringify([...new Set(list)]), r.id);
   }
   return rows.length;
 }
 
-taxonomyRouter.patch('/tags/:id', (req, res) => {
+taxonomyRouter.patch('/tags/:id', async (req, res) => {
   requireManager(req);
-  const cur = db.prepare(`SELECT * FROM contact_tags WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
+  const cur = await db.prepare(`SELECT * FROM contact_tags WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
   if (!cur) throw new HttpError(404, 'Etiqueta não encontrada.');
   const name = req.body?.name === undefined ? cur.name : cleanName(req.body.name, 40, 'etiqueta');
-  const clash = db.prepare(`SELECT id FROM contact_tags WHERE tenant_id = ? AND name = ? AND id <> ?`).get(tid(req), name, cur.id);
+  const clash = await db.prepare(`SELECT id FROM contact_tags WHERE tenant_id = ? AND name = ? AND id <> ?`).get(tid(req), name, cur.id);
   if (clash) throw new HttpError(409, `A etiqueta "${name}" já existe.`);
   const color = req.body?.color === undefined ? cur.color : cleanColor(req.body.color);
   const description = req.body?.description === undefined ? cur.description : String(req.body.description).trim().slice(0, 200);
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    db.prepare(`UPDATE contact_tags SET name = ?, color = ?, description = ? WHERE id = ?`).run(name, color, description, cur.id);
-    if (name !== cur.name) rewriteTag(tid(req), cur.name, name);
-    db.exec('COMMIT');
-  } catch (e) {
-    db.exec('ROLLBACK');
-    throw e;
-  }
-  audit({ ...actor(req), action: 'tag.updated', target: name, details: name !== cur.name ? { renamedFrom: cur.name } : undefined });
+  await tx(async () => {
+    await db.prepare(`UPDATE contact_tags SET name = ?, color = ?, description = ? WHERE id = ?`).run(name, color, description, cur.id);
+    if (name !== cur.name) await rewriteTag(tid(req), cur.name, name);
+  });
+  await audit({ ...actor(req), action: 'tag.updated', target: name, details: name !== cur.name ? { renamedFrom: cur.name } : undefined });
   res.json({ ok: true });
 });
 
-taxonomyRouter.delete('/tags/:id', (req, res) => {
+taxonomyRouter.delete('/tags/:id', async (req, res) => {
   requireManager(req);
-  const cur = db.prepare(`SELECT * FROM contact_tags WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
+  const cur = await db.prepare(`SELECT * FROM contact_tags WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
   if (!cur) throw new HttpError(404, 'Etiqueta não encontrada.');
-  db.exec('BEGIN IMMEDIATE');
   let affected = 0;
-  try {
-    affected = rewriteTag(tid(req), cur.name, null);
-    db.prepare(`DELETE FROM contact_tags WHERE id = ?`).run(cur.id);
-    db.exec('COMMIT');
-  } catch (e) {
-    db.exec('ROLLBACK');
-    throw e;
-  }
-  audit({ ...actor(req), action: 'tag.deleted', target: cur.name, details: { contactsAffected: affected } });
+  await tx(async () => {
+    affected = await rewriteTag(tid(req), cur.name, null);
+    await db.prepare(`DELETE FROM contact_tags WHERE id = ?`).run(cur.id);
+  });
+  await audit({ ...actor(req), action: 'tag.deleted', target: cur.name, details: { contactsAffected: affected } });
   res.json({ ok: true, contactsAffected: affected });
 });
 
@@ -350,83 +315,83 @@ function cleanAcronym(v: unknown) {
   return s;
 }
 
-taxonomyRouter.post('/proposition-types', (req, res) => {
+taxonomyRouter.post('/proposition-types', async (req, res) => {
   requireManager(req);
-  ensurePropositionTypes(tid(req));
+  await ensurePropositionTypes(tid(req));
   const name = cleanName(req.body?.name, 60, 'tipo de proposição');
   const acronym = cleanAcronym(req.body?.acronym);
-  if (db.prepare(`SELECT 1 FROM proposition_types WHERE tenant_id = ? AND name = ?`).get(tid(req), name)) {
+  if (await db.prepare(`SELECT 1 FROM proposition_types WHERE tenant_id = ? AND name = ?`).get(tid(req), name)) {
     throw new HttpError(409, `O tipo "${name}" já existe.`);
   }
   const id = crypto.randomUUID();
-  db.prepare(`INSERT INTO proposition_types (id, tenant_id, name, acronym, description) VALUES (?, ?, ?, ?, ?)`).run(
+  await db.prepare(`INSERT INTO proposition_types (id, tenant_id, name, acronym, description) VALUES (?, ?, ?, ?, ?)`).run(
     id, tid(req), name, acronym, String(req.body?.description ?? '').trim().slice(0, 200)
   );
-  audit({ ...actor(req), action: 'proposition_type.created', target: name });
+  await audit({ ...actor(req), action: 'proposition_type.created', target: name });
   res.status(201).json({ id });
 });
 
-taxonomyRouter.patch('/proposition-types/:id', (req, res) => {
+taxonomyRouter.patch('/proposition-types/:id', async (req, res) => {
   requireManager(req);
-  const cur = db.prepare(`SELECT * FROM proposition_types WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
+  const cur = await db.prepare(`SELECT * FROM proposition_types WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
   if (!cur) throw new HttpError(404, 'Tipo de proposição não encontrado.');
   const name = req.body?.name === undefined ? cur.name : cleanName(req.body.name, 60, 'tipo de proposição');
-  if (db.prepare(`SELECT 1 FROM proposition_types WHERE tenant_id = ? AND name = ? AND id <> ?`).get(tid(req), name, cur.id)) {
+  if (await db.prepare(`SELECT 1 FROM proposition_types WHERE tenant_id = ? AND name = ? AND id <> ?`).get(tid(req), name, cur.id)) {
     throw new HttpError(409, `O tipo "${name}" já existe.`);
   }
   const acronym = req.body?.acronym === undefined ? cur.acronym : cleanAcronym(req.body.acronym);
   const description = req.body?.description === undefined ? cur.description : String(req.body.description).trim().slice(0, 200);
-  db.prepare(`UPDATE proposition_types SET name = ?, acronym = ?, description = ? WHERE id = ?`).run(name, acronym, description, cur.id);
-  audit({ ...actor(req), action: 'proposition_type.updated', target: name, details: name !== cur.name ? { renamedFrom: cur.name } : undefined });
+  await db.prepare(`UPDATE proposition_types SET name = ?, acronym = ?, description = ? WHERE id = ?`).run(name, acronym, description, cur.id);
+  await audit({ ...actor(req), action: 'proposition_type.updated', target: name, details: name !== cur.name ? { renamedFrom: cur.name } : undefined });
   res.json({ ok: true });
 });
 
-taxonomyRouter.delete('/proposition-types/:id', (req, res) => {
+taxonomyRouter.delete('/proposition-types/:id', async (req, res) => {
   requireManager(req);
-  const cur = db.prepare(`SELECT * FROM proposition_types WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
+  const cur = await db.prepare(`SELECT * FROM proposition_types WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
   if (!cur) throw new HttpError(404, 'Tipo de proposição não encontrado.');
-  db.prepare(`DELETE FROM proposition_types WHERE id = ?`).run(cur.id);
-  audit({ ...actor(req), action: 'proposition_type.deleted', target: cur.name });
+  await db.prepare(`DELETE FROM proposition_types WHERE id = ?`).run(cur.id);
+  await audit({ ...actor(req), action: 'proposition_type.deleted', target: cur.name });
   res.json({ ok: true });
 });
 
 // ----- listas simples: canais de entrada e temas de demanda -----
 function simpleListRoutes(path: string, list: SimpleList, label: { one: string; notFound: string; audit: string }) {
-  taxonomyRouter.post(`/${path}`, (req, res) => {
+  taxonomyRouter.post(`/${path}`, async (req, res) => {
     requireManager(req);
-    ensureSimpleList(list, tid(req));
+    await ensureSimpleList(list, tid(req));
     const name = cleanName(req.body?.name, 60, label.one);
-    if (db.prepare(`SELECT 1 FROM ${list.table} WHERE tenant_id = ? AND name = ?`).get(tid(req), name)) {
+    if (await db.prepare(`SELECT 1 FROM ${list.table} WHERE tenant_id = ? AND name = ?`).get(tid(req), name)) {
       throw new HttpError(409, `"${name}" já existe.`);
     }
     const id = crypto.randomUUID();
-    db.prepare(`INSERT INTO ${list.table} (id, tenant_id, name, description) VALUES (?, ?, ?, ?)`).run(
+    await db.prepare(`INSERT INTO ${list.table} (id, tenant_id, name, description) VALUES (?, ?, ?, ?)`).run(
       id, tid(req), name, String(req.body?.description ?? '').trim().slice(0, 200)
     );
-    audit({ ...actor(req), action: `${label.audit}.created`, target: name });
+    await audit({ ...actor(req), action: `${label.audit}.created`, target: name });
     res.status(201).json({ id });
   });
 
-  taxonomyRouter.patch(`/${path}/:id`, (req, res) => {
+  taxonomyRouter.patch(`/${path}/:id`, async (req, res) => {
     requireManager(req);
-    const cur = db.prepare(`SELECT * FROM ${list.table} WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
+    const cur = await db.prepare(`SELECT * FROM ${list.table} WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
     if (!cur) throw new HttpError(404, label.notFound);
     const name = req.body?.name === undefined ? cur.name : cleanName(req.body.name, 60, label.one);
-    if (db.prepare(`SELECT 1 FROM ${list.table} WHERE tenant_id = ? AND name = ? AND id <> ?`).get(tid(req), name, cur.id)) {
+    if (await db.prepare(`SELECT 1 FROM ${list.table} WHERE tenant_id = ? AND name = ? AND id <> ?`).get(tid(req), name, cur.id)) {
       throw new HttpError(409, `"${name}" já existe.`);
     }
     const description = req.body?.description === undefined ? cur.description : String(req.body.description).trim().slice(0, 200);
-    db.prepare(`UPDATE ${list.table} SET name = ?, description = ? WHERE id = ?`).run(name, description, cur.id);
-    audit({ ...actor(req), action: `${label.audit}.updated`, target: name, details: name !== cur.name ? { renamedFrom: cur.name } : undefined });
+    await db.prepare(`UPDATE ${list.table} SET name = ?, description = ? WHERE id = ?`).run(name, description, cur.id);
+    await audit({ ...actor(req), action: `${label.audit}.updated`, target: name, details: name !== cur.name ? { renamedFrom: cur.name } : undefined });
     res.json({ ok: true });
   });
 
-  taxonomyRouter.delete(`/${path}/:id`, (req, res) => {
+  taxonomyRouter.delete(`/${path}/:id`, async (req, res) => {
     requireManager(req);
-    const cur = db.prepare(`SELECT * FROM ${list.table} WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
+    const cur = await db.prepare(`SELECT * FROM ${list.table} WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
     if (!cur) throw new HttpError(404, label.notFound);
-    db.prepare(`DELETE FROM ${list.table} WHERE id = ?`).run(cur.id);
-    audit({ ...actor(req), action: `${label.audit}.deleted`, target: cur.name });
+    await db.prepare(`DELETE FROM ${list.table} WHERE id = ?`).run(cur.id);
+    await audit({ ...actor(req), action: `${label.audit}.deleted`, target: cur.name });
     res.json({ ok: true });
   });
 }

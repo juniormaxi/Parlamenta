@@ -1,17 +1,151 @@
-import { DatabaseSync } from 'node:sqlite';
+/**
+ * PostgreSQL data layer (Railway: DATABASE_URL).
+ *
+ * API kept close to the previous SQLite one so queries read the same:
+ *   await db.prepare(sql).get(...params)   -> first row | undefined
+ *   await db.prepare(sql).all(...params)   -> rows
+ *   await db.prepare(sql).run(...params)   -> { changes }
+ * `?` placeholders are converted to $1..$n. Inside `tx(async () => ...)` every query
+ * automatically runs on the transaction's connection (AsyncLocalStorage).
+ *
+ * Conventions preserved from the SQLite schema:
+ * - timestamps are TEXT in UTC "YYYY-MM-DD HH:MM:SS" (SQL helper datetime('now'[, modifier]) exists
+ *   in Postgres too, see migration), so the front-end sees exactly the same values;
+ * - case-insensitive names use CITEXT;
+ * - JSON arrays are TEXT columns (cast to jsonb only when queried).
+ */
 import fs from 'node:fs';
 import path from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import pg from 'pg';
 
+/** Uploaded files (speeches) still live on disk — mount a Railway Volume here in production. */
 export const DATA_DIR = process.env.PARLAMENTA_DATA_DIR || path.resolve(process.cwd(), 'data');
-export const DB_PATH = path.join(DATA_DIR, 'parlamenta.db');
-
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
-export const db = new DatabaseSync(DB_PATH);
+// COUNT/SUM return int8/numeric; the app always treated them as JS numbers.
+pg.types.setTypeParser(20, (v) => Number(v));
+pg.types.setTypeParser(1700, (v) => Number(v));
 
-db.exec(`
-  PRAGMA journal_mode = WAL;
-  PRAGMA foreign_keys = ON;
+const DATABASE_URL = process.env.DATABASE_URL;
+if (!DATABASE_URL) {
+  throw new Error('DATABASE_URL não definida. Em desenvolvimento rode `npm run dev:db` e use DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5433/postgres');
+}
+const needsSsl = /sslmode=require/.test(DATABASE_URL) || process.env.PGSSL === 'require';
+
+export const pool = new pg.Pool({
+  connectionString: DATABASE_URL,
+  max: Number(process.env.PG_POOL_MAX || 10),
+  ssl: needsSsl ? { rejectUnauthorized: false } : undefined,
+  idleTimeoutMillis: 30_000,
+});
+pool.on('error', (e) => console.error('[pg] erro em conexão ociosa:', e.message));
+// Stored timestamps are UTC text; parse/format them in UTC regardless of the server's default.
+pool.on('connect', (c) => {
+  c.query("SET TIME ZONE 'UTC'").catch(() => undefined);
+});
+
+const txStore = new AsyncLocalStorage<pg.PoolClient>();
+
+/** Converts `?` placeholders (outside string literals / quoted identifiers) to $1..$n. */
+function toPg(sql: string): string {
+  let out = '';
+  let n = 0;
+  let quote: string | null = null;
+  for (let i = 0; i < sql.length; i++) {
+    const c = sql[i];
+    if (quote) {
+      out += c;
+      if (c === quote) quote = null;
+    } else if (c === "'" || c === '"') {
+      quote = c;
+      out += c;
+    } else if (c === '?') {
+      out += `$${++n}`;
+    } else {
+      out += c;
+    }
+  }
+  return out;
+}
+
+const cache = new Map<string, string>();
+async function query(sql: string, params: unknown[]) {
+  let text = cache.get(sql);
+  if (!text) {
+    text = toPg(sql);
+    if (cache.size < 2000) cache.set(sql, text);
+  }
+  const values = params.map((v) => (v === undefined ? null : v));
+  const client = txStore.getStore();
+  return client ? client.query(text, values) : pool.query(text, values);
+}
+
+export interface Statement {
+  get<T = any>(...params: unknown[]): Promise<T | undefined>;
+  all<T = any>(...params: unknown[]): Promise<T[]>;
+  run(...params: unknown[]): Promise<{ changes: number }>;
+}
+
+export const db = {
+  prepare(sql: string): Statement {
+    return {
+      get: async (...p) => (await query(sql, p)).rows[0],
+      all: async (...p) => (await query(sql, p)).rows,
+      run: async (...p) => ({ changes: (await query(sql, p)).rowCount ?? 0 }),
+    };
+  },
+  /** Multiple statements, no parameters (DDL). */
+  async exec(sql: string) {
+    const client = txStore.getStore();
+    await (client ? client.query(sql) : pool.query(sql));
+  },
+};
+
+/**
+ * Runs `fn` in a transaction; queries made inside (even in called functions) use its connection.
+ * Nested calls join the outer transaction.
+ */
+export async function tx<T>(fn: () => Promise<T>): Promise<T> {
+  if (txStore.getStore()) return fn();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await txStore.run(client, fn);
+    await client.query('COMMIT');
+    return result;
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Schema (idempotent). Runs on boot — creates every table in a fresh database.
+// ---------------------------------------------------------------------------
+const SCHEMA = `
+  CREATE EXTENSION IF NOT EXISTS citext;
+
+  -- SQLite-compatible time helpers: UTC text "YYYY-MM-DD HH:MM:SS".
+  CREATE OR REPLACE FUNCTION datetime(base text) RETURNS text LANGUAGE sql STABLE AS $$
+    SELECT to_char((CASE WHEN base = 'now' THEN now() ELSE base::timestamptz END) AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
+  $$;
+  CREATE OR REPLACE FUNCTION datetime(base text, modifier text) RETURNS text LANGUAGE sql STABLE AS $$
+    SELECT to_char((CASE WHEN base = 'now' THEN now() ELSE base::timestamptz END) AT TIME ZONE 'UTC' + modifier::interval, 'YYYY-MM-DD HH24:MI:SS')
+  $$;
+  -- SQLite json_each(text) over a JSON array of strings: FROM t, json_each(t.tags) j ... j.value
+  CREATE OR REPLACE FUNCTION json_each(arr text) RETURNS TABLE(value text) LANGUAGE sql IMMUTABLE AS $$
+    SELECT jsonb_array_elements_text(COALESCE(NULLIF(arr, ''), '[]')::jsonb)
+  $$;
+  -- SQLite date(ts, 'localtime'): calendar day in the cabinets' time zone.
+  CREATE OR REPLACE FUNCTION date(ts text, modifier text) RETURNS text LANGUAGE sql STABLE AS $$
+    SELECT to_char(CASE WHEN modifier = 'localtime' THEN (ts::timestamptz AT TIME ZONE 'America/Cuiaba') ELSE (ts::timestamptz AT TIME ZONE 'UTC') END, 'YYYY-MM-DD')
+  $$;
+  CREATE OR REPLACE FUNCTION utc_iso_now() RETURNS text LANGUAGE sql STABLE AS $$
+    SELECT to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+  $$;
 
   CREATE TABLE IF NOT EXISTS tenants (
     id                TEXT PRIMARY KEY,
@@ -24,7 +158,11 @@ db.exec(`
     status            TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','suspended')),
     storage_quota_mb  INTEGER NOT NULL DEFAULT 512,
     max_users         INTEGER NOT NULL DEFAULT 25,
-    created_at        TEXT NOT NULL DEFAULT (datetime('now'))
+    taxonomy_seeded          INTEGER NOT NULL DEFAULT 0,
+    proposition_types_seeded INTEGER NOT NULL DEFAULT 0,
+    demand_themes_seeded     INTEGER NOT NULL DEFAULT 0,
+    entry_channels_seeded    INTEGER NOT NULL DEFAULT 0,
+    created_at        TEXT NOT NULL DEFAULT datetime('now')
   );
 
   -- tenant_id NULL only for platform super admins (enforced by CHECK).
@@ -32,11 +170,11 @@ db.exec(`
     id             TEXT PRIMARY KEY,
     tenant_id      TEXT REFERENCES tenants(id) ON DELETE CASCADE,
     name           TEXT NOT NULL,
-    email          TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    email          CITEXT NOT NULL UNIQUE,
     password_hash  TEXT NOT NULL,
     role           TEXT NOT NULL,
     status         TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','disabled')),
-    created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at     TEXT NOT NULL DEFAULT datetime('now'),
     last_login_at  TEXT,
     CHECK ((role = 'super_admin' AND tenant_id IS NULL) OR (role <> 'super_admin' AND tenant_id IS NOT NULL))
   );
@@ -46,28 +184,27 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS sessions (
     token_hash  TEXT PRIMARY KEY,
     user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at  TEXT NOT NULL DEFAULT datetime('now'),
     expires_at  TEXT NOT NULL,
     ip          TEXT,
     user_agent  TEXT
   );
   CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 
-  -- Generic per-tenant document store (protocols, contacts, documents...).
-  -- Every row carries tenant_id; tenant routes always filter by the session's tenant.
+  -- Generic per-tenant document store.
   CREATE TABLE IF NOT EXISTS tenant_records (
     id          TEXT PRIMARY KEY,
     tenant_id   TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     kind        TEXT NOT NULL,
     data        TEXT NOT NULL,
     created_by  TEXT REFERENCES users(id) ON DELETE SET NULL,
-    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at  TEXT NOT NULL DEFAULT datetime('now')
   );
   CREATE INDEX IF NOT EXISTS idx_records_tenant_kind ON tenant_records(tenant_id, kind);
 
   CREATE TABLE IF NOT EXISTS audit_log (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    at          TEXT NOT NULL DEFAULT (datetime('now')),
+    id          BIGSERIAL PRIMARY KEY,
+    at          TEXT NOT NULL DEFAULT datetime('now'),
     actor_id    TEXT,
     actor_email TEXT,
     tenant_id   TEXT,
@@ -95,7 +232,7 @@ db.exec(`
     city             TEXT NOT NULL DEFAULT '',
     state            TEXT NOT NULL DEFAULT '',
     zip              TEXT NOT NULL DEFAULT '',
-    category         TEXT NOT NULL DEFAULT '',   -- e.g. Liderança, Eleitor, Servidor, Imprensa
+    category         CITEXT NOT NULL DEFAULT '',
     organization     TEXT NOT NULL DEFAULT '',
     tags             TEXT NOT NULL DEFAULT '[]', -- JSON array of strings
     notes            TEXT NOT NULL DEFAULT '',
@@ -103,8 +240,8 @@ db.exec(`
     consent_whatsapp INTEGER NOT NULL DEFAULT 0,  -- LGPD opt-in for messaging
     consent_email    INTEGER NOT NULL DEFAULT 0,
     created_by       TEXT REFERENCES users(id) ON DELETE SET NULL,
-    created_at       TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at       TEXT NOT NULL DEFAULT datetime('now'),
+    updated_at       TEXT NOT NULL DEFAULT datetime('now')
   );
   CREATE INDEX IF NOT EXISTS idx_contacts_tenant_name ON contacts(tenant_id, name);
   CREATE INDEX IF NOT EXISTS idx_contacts_tenant_phone ON contacts(tenant_id, phone);
@@ -125,86 +262,98 @@ db.exec(`
     tags         TEXT NOT NULL DEFAULT '[]',
     rows_json    TEXT,                        -- parsed rows kept only while in preview
     created_by   TEXT REFERENCES users(id) ON DELETE SET NULL,
-    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at   TEXT NOT NULL DEFAULT datetime('now'),
     committed_at TEXT
   );
   CREATE INDEX IF NOT EXISTS idx_imports_tenant ON contact_imports(tenant_id, created_at);
 
-  -- ===== Banco de Dados: Discursos (acervo do que o parlamentar disse) =====
+  -- ===== Banco de Dados: Discursos =====
   CREATE TABLE IF NOT EXISTS speeches (
     id              TEXT PRIMARY KEY,
     tenant_id       TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     title           TEXT NOT NULL,
-    speech_date     TEXT NOT NULL,             -- YYYY-MM-DD when it was said
-    occasion        TEXT NOT NULL,             -- Sessão Plenária, Audiência Pública, Entrevista...
+    speech_date     TEXT NOT NULL,
+    occasion        TEXT NOT NULL,
     location        TEXT NOT NULL DEFAULT '',
     media_type      TEXT NOT NULL DEFAULT 'pending' CHECK (media_type IN ('pending','audio','video','pdf','docx','text')),
     file_name       TEXT NOT NULL DEFAULT '',
     mime_type       TEXT NOT NULL DEFAULT '',
-    file_bytes      INTEGER NOT NULL DEFAULT 0, -- size of the original upload
-    stored_bytes    INTEGER NOT NULL DEFAULT 0, -- bytes kept on disk (0 for videos: discarded)
+    file_bytes      BIGINT NOT NULL DEFAULT 0,
+    stored_bytes    BIGINT NOT NULL DEFAULT 0,
     file_kept       INTEGER NOT NULL DEFAULT 0,
     status          TEXT NOT NULL DEFAULT 'awaiting_file'
                     CHECK (status IN ('awaiting_file','queued','processing','done','needs_ai','error')),
     status_detail   TEXT NOT NULL DEFAULT '',
-    text            TEXT NOT NULL DEFAULT '',  -- transcript / OCR / native text
+    text            TEXT NOT NULL DEFAULT '',
     summary         TEXT NOT NULL DEFAULT '',
-    themes          TEXT NOT NULL DEFAULT '[]', -- JSON array (fixed catalog)
-    keywords        TEXT NOT NULL DEFAULT '[]', -- JSON array (free labels)
-    tagged_by       TEXT NOT NULL DEFAULT '',   -- ia | palavras-chave | manual
+    themes          TEXT NOT NULL DEFAULT '[]',
+    keywords        TEXT NOT NULL DEFAULT '[]',
+    tagged_by       TEXT NOT NULL DEFAULT '',
     created_by      TEXT REFERENCES users(id) ON DELETE SET NULL,
-    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at      TEXT NOT NULL DEFAULT datetime('now'),
     processed_at    TEXT
   );
   CREATE INDEX IF NOT EXISTS idx_speeches_tenant_date ON speeches(tenant_id, speech_date);
 
-  -- ===== Banco de Dados: Categorias de contatos e Etiquetas de classificação =====
-  -- Controlled vocabularies managed by each cabinet; contacts reference them by name.
+  -- ===== Categorias (vocabulários controlados por gabinete) =====
   CREATE TABLE IF NOT EXISTS contact_categories (
     id          TEXT PRIMARY KEY,
     tenant_id   TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    name        TEXT NOT NULL COLLATE NOCASE,
+    name        CITEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
-    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at  TEXT NOT NULL DEFAULT datetime('now'),
     UNIQUE (tenant_id, name)
   );
   CREATE TABLE IF NOT EXISTS contact_tags (
     id          TEXT PRIMARY KEY,
     tenant_id   TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    name        TEXT NOT NULL COLLATE NOCASE,
+    name        CITEXT NOT NULL,
     color       TEXT NOT NULL DEFAULT 'teal',
     description TEXT NOT NULL DEFAULT '',
-    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at  TEXT NOT NULL DEFAULT datetime('now'),
     UNIQUE (tenant_id, name)
   );
-
-  -- Canais de entrada de atendimento (Presencial, Telefone...) usados em Caixa de Entrada › Registrar Manual.
   CREATE TABLE IF NOT EXISTS entry_channels (
     id          TEXT PRIMARY KEY,
     tenant_id   TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    name        TEXT NOT NULL COLLATE NOCASE,
+    name        CITEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
-    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at  TEXT NOT NULL DEFAULT datetime('now'),
+    UNIQUE (tenant_id, name)
+  );
+  CREATE TABLE IF NOT EXISTS demand_themes (
+    id          TEXT PRIMARY KEY,
+    tenant_id   TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    name        CITEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL DEFAULT datetime('now'),
+    UNIQUE (tenant_id, name)
+  );
+  CREATE TABLE IF NOT EXISTS proposition_types (
+    id          TEXT PRIMARY KEY,
+    tenant_id   TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    name        CITEXT NOT NULL,
+    acronym     TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL DEFAULT datetime('now'),
     UNIQUE (tenant_id, name)
   );
 
   -- ===== Protocolos & Demandas =====
-  -- "data" holds the full client-side Protocol object (minus timeline); columns hold what the server
-  -- queries or exposes publicly. Numbers are sequential per tenant and year (PRT-2026-00001).
   CREATE TABLE IF NOT EXISTS protocols (
     id           TEXT PRIMARY KEY,
     tenant_id    TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     number       TEXT NOT NULL,
     year         INTEGER NOT NULL,
     seq          INTEGER NOT NULL,
-    source       TEXT NOT NULL DEFAULT 'interno',  -- interno | web
+    source       TEXT NOT NULL DEFAULT 'interno',
     status       TEXT NOT NULL DEFAULT 'novo',
     theme        TEXT NOT NULL DEFAULT '',
     city         TEXT NOT NULL DEFAULT '',
     phone_last4  TEXT NOT NULL DEFAULT '',
     data         TEXT NOT NULL,
-    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at   TEXT NOT NULL DEFAULT datetime('now'),
+    updated_at   TEXT NOT NULL DEFAULT datetime('now'),
     UNIQUE (tenant_id, number),
     UNIQUE (tenant_id, year, seq)
   );
@@ -212,10 +361,11 @@ db.exec(`
   -- Append-only timeline. visibility: internal (equipe) | public (cidadão) | both.
   CREATE TABLE IF NOT EXISTS protocol_events (
     id          TEXT PRIMARY KEY,
+    pos         BIGSERIAL,
     protocol_id TEXT NOT NULL REFERENCES protocols(id) ON DELETE CASCADE,
     tenant_id   TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     client_id   TEXT,
-    at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    at          TEXT NOT NULL DEFAULT utc_iso_now(),
     author      TEXT NOT NULL DEFAULT '',
     role        TEXT NOT NULL DEFAULT '',
     action      TEXT NOT NULL,
@@ -226,8 +376,7 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_protocol_events ON protocol_events(protocol_id, at);
 
-  -- Fila de e-mails transacionais (Resend). Gravada na mesma transação do evento que a origina;
-  -- um worker envia e reenvia com backoff. status: pending | sent | failed
+  -- Fila de e-mails transacionais (Resend). status: pending | sent | failed
   CREATE TABLE IF NOT EXISTS email_outbox (
     id           TEXT PRIMARY KEY,
     tenant_id    TEXT REFERENCES tenants(id) ON DELETE CASCADE,
@@ -239,60 +388,37 @@ db.exec(`
     ref          TEXT,
     status       TEXT NOT NULL DEFAULT 'pending',
     attempts     INTEGER NOT NULL DEFAULT 0,
-    next_try_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    next_try_at  TEXT NOT NULL DEFAULT datetime('now'),
     last_error   TEXT,
     provider_id  TEXT,
-    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at   TEXT NOT NULL DEFAULT datetime('now'),
     sent_at      TEXT
   );
   CREATE INDEX IF NOT EXISTS idx_email_outbox_pending ON email_outbox(status, next_try_at);
 
-  -- Temas de demanda (Saúde, Educação...) usados em Protocolos › Novo Protocolo.
-  CREATE TABLE IF NOT EXISTS demand_themes (
-    id          TEXT PRIMARY KEY,
-    tenant_id   TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    name        TEXT NOT NULL COLLATE NOCASE,
-    description TEXT NOT NULL DEFAULT '',
-    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE (tenant_id, name)
-  );
-
-  -- Tipos de proposição/documento (Ofício, Requerimento, Projeto de Lei...) used by "Documentos do Gabinete".
-  CREATE TABLE IF NOT EXISTS proposition_types (
-    id          TEXT PRIMARY KEY,
-    tenant_id   TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    name        TEXT NOT NULL COLLATE NOCASE,
-    acronym     TEXT NOT NULL DEFAULT '',  -- prefix for document numbers, e.g. OF, REQ, PL
-    description TEXT NOT NULL DEFAULT '',
-    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE (tenant_id, name)
-  );
-
   -- ===== Comunicação: Clipping =====
-  -- Monitored topics: each one becomes a news search and a filter for feed items.
   CREATE TABLE IF NOT EXISTS clipping_topics (
     id            TEXT PRIMARY KEY,
     tenant_id     TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    name          TEXT NOT NULL COLLATE NOCASE,
-    terms         TEXT NOT NULL DEFAULT '[]',  -- JSON: any of these terms matches
-    exclude_terms TEXT NOT NULL DEFAULT '[]',  -- JSON: items containing these are dropped
+    name          CITEXT NOT NULL,
+    terms         TEXT NOT NULL DEFAULT '[]',
+    exclude_terms TEXT NOT NULL DEFAULT '[]',
     active        INTEGER NOT NULL DEFAULT 1,
-    created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at    TEXT NOT NULL DEFAULT datetime('now'),
     UNIQUE (tenant_id, name)
   );
-  -- Sites monitored through their RSS/Atom feed (auto-discovered from the site URL).
   CREATE TABLE IF NOT EXISTS clipping_sources (
     id              TEXT PRIMARY KEY,
     tenant_id       TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     name            TEXT NOT NULL,
     site_url        TEXT NOT NULL DEFAULT '',
     feed_url        TEXT NOT NULL,
-    capture_all     INTEGER NOT NULL DEFAULT 0, -- 1 = keep every item, not only topic matches
+    capture_all     INTEGER NOT NULL DEFAULT 0,
     active          INTEGER NOT NULL DEFAULT 1,
     last_fetched_at TEXT,
     last_status     TEXT NOT NULL DEFAULT '',
     last_error      TEXT NOT NULL DEFAULT '',
-    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at      TEXT NOT NULL DEFAULT datetime('now'),
     UNIQUE (tenant_id, feed_url)
   );
   CREATE TABLE IF NOT EXISTS clipping_settings (
@@ -312,14 +438,14 @@ db.exec(`
     summary           TEXT NOT NULL DEFAULT '',
     source_name       TEXT NOT NULL DEFAULT '',
     source_domain     TEXT NOT NULL DEFAULT '',
-    origin            TEXT NOT NULL DEFAULT '',    -- google | bing | feed
+    origin            TEXT NOT NULL DEFAULT '',
     published_at      TEXT NOT NULL,
-    fetched_at        TEXT NOT NULL DEFAULT (datetime('now')),
+    fetched_at        TEXT NOT NULL DEFAULT datetime('now'),
     topics            TEXT NOT NULL DEFAULT '[]',
     themes            TEXT NOT NULL DEFAULT '[]',
     sentiment_auto    TEXT NOT NULL DEFAULT 'neutro' CHECK (sentiment_auto IN ('bom','neutro','ruim')),
     sentiment_reason  TEXT NOT NULL DEFAULT '',
-    sentiment_method  TEXT NOT NULL DEFAULT 'palavras-chave', -- ia | palavras-chave
+    sentiment_method  TEXT NOT NULL DEFAULT 'palavras-chave',
     sentiment_manual  TEXT CHECK (sentiment_manual IN ('bom','neutro','ruim')),
     sentiment_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
     sentiment_at      TEXT,
@@ -332,32 +458,29 @@ db.exec(`
     id          TEXT PRIMARY KEY,
     tenant_id   TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     trigger     TEXT NOT NULL,
-    started_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    started_at  TEXT NOT NULL DEFAULT datetime('now'),
     finished_at TEXT,
-    status      TEXT NOT NULL DEFAULT 'running', -- running | done | error
+    status      TEXT NOT NULL DEFAULT 'running',
     new_items   INTEGER NOT NULL DEFAULT 0,
     requests    INTEGER NOT NULL DEFAULT 0,
     errors      TEXT NOT NULL DEFAULT '[]'
   );
   CREATE INDEX IF NOT EXISTS idx_clip_runs_tenant ON clipping_runs(tenant_id, started_at);
-`);
+`;
 
-// Additive migration: marks tenants whose default categories/tags were already created.
-const tenantCols = db.prepare(`PRAGMA table_info(tenants)`).all() as { name: string }[];
-if (!tenantCols.some((c) => c.name === 'taxonomy_seeded')) {
-  db.exec(`ALTER TABLE tenants ADD COLUMN taxonomy_seeded INTEGER NOT NULL DEFAULT 0`);
-}
-if (!tenantCols.some((c) => c.name === 'proposition_types_seeded')) {
-  db.exec(`ALTER TABLE tenants ADD COLUMN proposition_types_seeded INTEGER NOT NULL DEFAULT 0`);
-}
-if (!tenantCols.some((c) => c.name === 'demand_themes_seeded')) {
-  db.exec(`ALTER TABLE tenants ADD COLUMN demand_themes_seeded INTEGER NOT NULL DEFAULT 0`);
-}
-if (!tenantCols.some((c) => c.name === 'entry_channels_seeded')) {
-  db.exec(`ALTER TABLE tenants ADD COLUMN entry_channels_seeded INTEGER NOT NULL DEFAULT 0`);
+/** Creates/updates the schema. A cluster-wide advisory lock keeps concurrent boots from racing. */
+export async function migrate() {
+  const client = await pool.connect();
+  try {
+    await client.query('SELECT pg_advisory_lock(727274)');
+    await client.query(SCHEMA);
+  } finally {
+    await client.query('SELECT pg_advisory_unlock(727274)').catch(() => undefined);
+    client.release();
+  }
 }
 
-export function audit(entry: {
+export async function audit(entry: {
   actorId?: string | null;
   actorEmail?: string | null;
   tenantId?: string | null;
@@ -366,23 +489,25 @@ export function audit(entry: {
   details?: unknown;
   ip?: string | null;
 }) {
-  db.prepare(
-    `INSERT INTO audit_log (actor_id, actor_email, tenant_id, action, target, details, ip)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    entry.actorId ?? null,
-    entry.actorEmail ?? null,
-    entry.tenantId ?? null,
-    entry.action,
-    entry.target ?? null,
-    entry.details === undefined ? null : JSON.stringify(entry.details),
-    entry.ip ?? null
-  );
+  await db
+    .prepare(
+      `INSERT INTO audit_log (actor_id, actor_email, tenant_id, action, target, details, ip)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      entry.actorId ?? null,
+      entry.actorEmail ?? null,
+      entry.tenantId ?? null,
+      entry.action,
+      entry.target ?? null,
+      entry.details === undefined ? null : JSON.stringify(entry.details),
+      entry.ip ?? null
+    );
 }
 
 /** Bytes used by each tenant: records + user rows + its audit trail. */
-export function tenantStorageBytes(): Map<string, number> {
-  const rows = db
+export async function tenantStorageBytes(): Promise<Map<string, number>> {
+  const rows = await db
     .prepare(
       `SELECT t.id AS tenant_id,
          COALESCE((SELECT SUM(length(r.data) + length(r.kind) + 64) FROM tenant_records r WHERE r.tenant_id = t.id), 0)
@@ -394,21 +519,16 @@ export function tenantStorageBytes(): Map<string, number> {
                      FROM speeches s WHERE s.tenant_id = t.id), 0)
        + COALESCE((SELECT SUM(length(COALESCE(i.rows_json,'')) + 96) FROM contact_imports i WHERE i.tenant_id = t.id), 0)
        + COALESCE((SELECT SUM(length(ci.title) + length(ci.summary) + length(ci.url) + 200) FROM clipping_items ci WHERE ci.tenant_id = t.id), 0)
+       + COALESCE((SELECT SUM(length(p.data) + 128) FROM protocols p WHERE p.tenant_id = t.id), 0)
          AS bytes
        FROM tenants t`
     )
-    .all() as { tenant_id: string; bytes: number }[];
+    .all<{ tenant_id: string; bytes: number }>();
   return new Map(rows.map((r) => [r.tenant_id, Number(r.bytes)]));
 }
 
-export function dbFileBytes(): number {
-  let total = 0;
-  for (const f of [DB_PATH, DB_PATH + '-wal', DB_PATH + '-shm']) {
-    try {
-      total += fs.statSync(f).size;
-    } catch {
-      /* file may not exist */
-    }
-  }
-  return total;
+/** Total size of the Postgres database (replaces the SQLite file size). */
+export async function dbFileBytes(): Promise<number> {
+  const r = await db.prepare(`SELECT pg_database_size(current_database()) AS n`).get<{ n: number }>();
+  return Number(r?.n ?? 0);
 }

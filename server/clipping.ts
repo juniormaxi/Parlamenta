@@ -7,7 +7,7 @@
 import crypto from 'node:crypto';
 import express, { type Request, type Response, type NextFunction } from 'express';
 import { XMLParser } from 'fast-xml-parser';
-import { db, audit } from './db';
+import { db, tx, audit } from './db';
 import { HttpError, bad } from './http';
 import { safeGet, FetchError } from './safeFetch';
 import { aiAvailable, keywordThemes, lexiconSentiment, classifyClippingWithAI, THEMES, type Sentiment } from './ai';
@@ -187,8 +187,8 @@ interface Topic {
   excludeTerms: string[];
   active: boolean;
 }
-const loadTopics = (tenantId: string, onlyActive = false): Topic[] =>
-  (db.prepare(`SELECT * FROM clipping_topics WHERE tenant_id = ? ${onlyActive ? 'AND active = 1' : ''} ORDER BY name COLLATE NOCASE`).all(tenantId) as any[]).map((r) => ({
+const loadTopics = async (tenantId: string, onlyActive = false): Promise<Topic[]> =>
+  (await db.prepare(`SELECT * FROM clipping_topics WHERE tenant_id = ? ${onlyActive ? 'AND active = 1' : ''} ORDER BY lower(name)`).all(tenantId) as any[]).map((r) => ({
     id: r.id,
     name: r.name,
     terms: JSON.parse(r.terms),
@@ -196,11 +196,11 @@ const loadTopics = (tenantId: string, onlyActive = false): Topic[] =>
     active: !!r.active,
   }));
 
-function getSettings(tenantId: string) {
-  let s = db.prepare(`SELECT * FROM clipping_settings WHERE tenant_id = ?`).get(tenantId) as any;
+async function getSettings(tenantId: string) {
+  let s = await db.prepare(`SELECT * FROM clipping_settings WHERE tenant_id = ?`).get(tenantId) as any;
   if (!s) {
-    db.prepare(`INSERT OR IGNORE INTO clipping_settings (tenant_id) VALUES (?)`).run(tenantId);
-    s = db.prepare(`SELECT * FROM clipping_settings WHERE tenant_id = ?`).get(tenantId);
+    await db.prepare(`INSERT INTO clipping_settings (tenant_id) VALUES (?) ON CONFLICT DO NOTHING`).run(tenantId);
+    s = await db.prepare(`SELECT * FROM clipping_settings WHERE tenant_id = ?`).get(tenantId);
   }
   return { googleNews: !!s.google_news, bingNews: !!s.bing_news, intervalMin: s.interval_min as number, autoCollect: !!s.auto_collect };
 }
@@ -223,14 +223,14 @@ export async function runCollection(tenantId: string, trigger: 'auto' | 'manual'
   if (running.has(tenantId)) return;
   running.add(tenantId);
   const runId = crypto.randomUUID();
-  db.prepare(`INSERT INTO clipping_runs (id, tenant_id, trigger) VALUES (?, ?, ?)`).run(runId, tenantId, trigger);
+  await db.prepare(`INSERT INTO clipping_runs (id, tenant_id, trigger) VALUES (?, ?, ?)`).run(runId, tenantId, trigger);
   const errors: string[] = [];
   let requests = 0;
   let inserted = 0;
   try {
-    const settings = getSettings(tenantId);
-    const topics = loadTopics(tenantId, true);
-    const sources = db.prepare(`SELECT * FROM clipping_sources WHERE tenant_id = ? AND active = 1`).all(tenantId) as any[];
+    const settings = await getSettings(tenantId);
+    const topics = await loadTopics(tenantId, true);
+    const sources = await db.prepare(`SELECT * FROM clipping_sources WHERE tenant_id = ? AND active = 1`).all(tenantId) as any[];
     const cutoff = Date.now() - MAX_AGE_DAYS * 86400_000;
     const candidates = new Map<string, RawItem & { origin: string; topics: Set<string> }>();
 
@@ -289,14 +289,14 @@ export async function runCollection(tenantId: string, trigger: 'auto' | 'manual'
           add({ ...it, sourceName: src.name }, 'feed', matched);
           kept++;
         }
-        db.prepare(`UPDATE clipping_sources SET last_fetched_at = datetime('now'), last_status = ?, last_error = '' WHERE id = ?`).run(
+        await db.prepare(`UPDATE clipping_sources SET last_fetched_at = datetime('now'), last_status = ?, last_error = '' WHERE id = ?`).run(
           `${feed.items.length} itens lidos · ${kept} relevantes`,
           src.id
         );
       } catch (e) {
         const msg = (e as Error).message;
         errors.push(`${src.name}: ${msg}`);
-        db.prepare(`UPDATE clipping_sources SET last_fetched_at = datetime('now'), last_status = 'erro', last_error = ? WHERE id = ?`).run(msg.slice(0, 300), src.id);
+        await db.prepare(`UPDATE clipping_sources SET last_fetched_at = datetime('now'), last_status = 'erro', last_error = ? WHERE id = ?`).run(msg.slice(0, 300), src.id);
       }
       await sleep(REQUEST_GAP_MS / 2);
     }
@@ -310,22 +310,21 @@ export async function runCollection(tenantId: string, trigger: 'auto' | 'manual'
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'palavras-chave')`
     );
     const newIds: string[] = [];
-    db.exec('BEGIN IMMEDIATE');
-    try {
+    await tx(async () => {
       for (const [urlHash, c] of candidates) {
-        if (findUrl.get(tenantId, urlHash)) continue;
+        if (await findUrl.get(tenantId, urlHash)) continue;
         const tHash = titleKey(c.title);
         const since = new Date(Date.parse(c.publishedAt) - 3 * 86400_000).toISOString();
-        const dup = findTitle.get(tenantId, tHash, since) as any;
+        const dup = await findTitle.get(tenantId, tHash, since) as any;
         if (dup) {
           const merged = [...new Set([...JSON.parse(dup.topics), ...c.topics])];
-          updTopics.run(JSON.stringify(merged), dup.id);
+          await updTopics.run(JSON.stringify(merged), dup.id);
           continue;
         }
         const text = `${c.title}. ${c.summary}`;
         const lex = lexiconSentiment(text);
         const id = crypto.randomUUID();
-        ins.run(
+        await ins.run(
           id, tenantId, c.url, urlHash, tHash, c.title, c.summary,
           c.sourceName || domainOf(c.url), domainOf(c.url), c.origin, c.publishedAt,
           JSON.stringify([...c.topics]), JSON.stringify(keywordThemes(text, 1).filter((t) => t !== 'Outros')),
@@ -333,20 +332,17 @@ export async function runCollection(tenantId: string, trigger: 'auto' | 'manual'
         );
         newIds.push(id);
       }
-      db.exec('COMMIT');
-    } catch (e) {
-      db.exec('ROLLBACK');
-      throw e;
-    }
+    });
     inserted = newIds.length;
 
     // 4) AI refinement of sentiment + themes (batched)
     if (aiAvailable() && newIds.length) {
-      const t = db.prepare(`SELECT name, parliamentarian FROM tenants WHERE id = ?`).get(tenantId) as any;
+      const t = await db.prepare(`SELECT name, parliamentarian FROM tenants WHERE id = ?`).get(tenantId) as any;
       const upd = db.prepare(`UPDATE clipping_items SET sentiment_auto = ?, sentiment_reason = ?, sentiment_method = 'ia', themes = ? WHERE id = ?`);
       for (let i = 0; i < Math.min(newIds.length, 150); i += 25) {
         const chunk = newIds.slice(i, i + 25);
-        const rows = chunk.map((id) => db.prepare(`SELECT id, title, summary, topics, themes FROM clipping_items WHERE id = ?`).get(id) as any);
+        const rows = (await db.prepare(`SELECT id, title, summary, topics, themes FROM clipping_items WHERE id = ANY(?::text[])`).all(chunk)) as any[];
+        rows.sort((a, b) => chunk.indexOf(a.id) - chunk.indexOf(b.id));
         try {
           const out = await classifyClippingWithAI(
             rows.map((r) => ({ title: r.title, summary: r.summary, topics: JSON.parse(r.topics) })),
@@ -355,7 +351,7 @@ export async function runCollection(tenantId: string, trigger: 'auto' | 'manual'
           for (const o of out) {
             const r = rows[o.index];
             const themes = [...new Set([...o.themes, ...JSON.parse(r.themes)])].slice(0, 4);
-            upd.run(o.sentiment, o.reason, JSON.stringify(themes), r.id);
+            await upd.run(o.sentiment, o.reason, JSON.stringify(themes), r.id);
           }
         } catch (e) {
           errors.push(`IA: ${(e as Error).message.slice(0, 150)}`);
@@ -364,12 +360,12 @@ export async function runCollection(tenantId: string, trigger: 'auto' | 'manual'
       }
     }
 
-    db.prepare(`UPDATE clipping_runs SET finished_at = datetime('now'), status = 'done', new_items = ?, requests = ?, errors = ? WHERE id = ?`).run(
+    await db.prepare(`UPDATE clipping_runs SET finished_at = datetime('now'), status = 'done', new_items = ?, requests = ?, errors = ? WHERE id = ?`).run(
       inserted, requests, JSON.stringify(errors.slice(0, 30)), runId
     );
   } catch (e) {
     console.error('[clipping] falha', tenantId, e);
-    db.prepare(`UPDATE clipping_runs SET finished_at = datetime('now'), status = 'error', new_items = ?, requests = ?, errors = ? WHERE id = ?`).run(
+    await db.prepare(`UPDATE clipping_runs SET finished_at = datetime('now'), status = 'error', new_items = ?, requests = ?, errors = ? WHERE id = ?`).run(
       inserted, requests, JSON.stringify([...errors, (e as Error).message].slice(0, 30)), runId
     );
   } finally {
@@ -378,14 +374,14 @@ export async function runCollection(tenantId: string, trigger: 'auto' | 'manual'
 }
 
 /** Background scheduler: each tenant is collected every `interval_min` minutes (one tenant at a time). */
-export function startClippingScheduler() {
-  db.prepare(`UPDATE clipping_runs SET status = 'error', finished_at = datetime('now'), errors = '["Interrompida por reinício do servidor"]' WHERE status = 'running'`).run();
+export async function startClippingScheduler() {
+  await db.prepare(`UPDATE clipping_runs SET status = 'error', finished_at = datetime('now'), errors = '["Interrompida por reinício do servidor"]' WHERE status = 'running'`).run();
   let busy = false;
   const tick = async () => {
     if (busy) return;
     busy = true;
     try {
-      const due = db
+      const due = await db
         .prepare(
           `SELECT t.id FROM tenants t
              LEFT JOIN clipping_settings s ON s.tenant_id = t.id
@@ -417,13 +413,13 @@ const cleanTerms = (v: unknown, field: string, max = 15): string[] => {
   return [...new Map(list.map((t) => [fold(t), t])).values()].slice(0, max);
 };
 
-clippingRouter.get('/config', (req, res) => {
+clippingRouter.get('/config', async (req, res) => {
   const t = tid(req);
-  const runs = db.prepare(`SELECT * FROM clipping_runs WHERE tenant_id = ? ORDER BY started_at DESC LIMIT 8`).all(t) as any[];
+  const runs = await db.prepare(`SELECT * FROM clipping_runs WHERE tenant_id = ? ORDER BY started_at DESC LIMIT 8`).all(t) as any[];
   res.json({
-    settings: getSettings(t),
-    topics: loadTopics(t),
-    sources: (db.prepare(`SELECT * FROM clipping_sources WHERE tenant_id = ? ORDER BY name COLLATE NOCASE`).all(t) as any[]).map((s) => ({
+    settings: await getSettings(t),
+    topics: await loadTopics(t),
+    sources: (await db.prepare(`SELECT * FROM clipping_sources WHERE tenant_id = ? ORDER BY lower(name)`).all(t) as any[]).map((s) => ({
       id: s.id,
       name: s.name,
       siteUrl: s.site_url,
@@ -442,70 +438,65 @@ clippingRouter.get('/config', (req, res) => {
   });
 });
 
-clippingRouter.put('/settings', (req, res) => {
+clippingRouter.put('/settings', async (req, res) => {
   requireManager(req);
-  getSettings(tid(req));
+  await getSettings(tid(req));
   const b = req.body ?? {};
   const interval = Number(b.intervalMin);
   if (!Number.isInteger(interval) || interval < 15 || interval > 1440) throw bad('Intervalo deve ser entre 15 e 1440 minutos.');
-  db.prepare(`UPDATE clipping_settings SET google_news = ?, bing_news = ?, interval_min = ?, auto_collect = ? WHERE tenant_id = ?`).run(
+  await db.prepare(`UPDATE clipping_settings SET google_news = ?, bing_news = ?, interval_min = ?, auto_collect = ? WHERE tenant_id = ?`).run(
     b.googleNews ? 1 : 0, b.bingNews ? 1 : 0, interval, b.autoCollect ? 1 : 0, tid(req)
   );
-  audit({ ...actor(req), action: 'clipping.settings_updated', details: b });
+  await audit({ ...actor(req), action: 'clipping.settings_updated', details: b });
   res.json({ ok: true });
 });
 
-clippingRouter.post('/topics', (req, res) => {
+clippingRouter.post('/topics', async (req, res) => {
   requireManager(req);
   const name = String(req.body?.name ?? '').trim().slice(0, 60);
   if (!name) throw bad('Informe o nome do tema.');
   const terms = cleanTerms(req.body?.terms, 'termos');
   if (!terms.length) throw bad('Informe ao menos um termo de busca.');
   const excludes = cleanTerms(req.body?.excludeTerms, 'termos excluídos');
-  if ((db.prepare(`SELECT COUNT(*) n FROM clipping_topics WHERE tenant_id = ?`).get(tid(req)) as any).n >= MAX_TOPICS) throw bad(`Limite de ${MAX_TOPICS} temas.`);
-  if (db.prepare(`SELECT 1 FROM clipping_topics WHERE tenant_id = ? AND name = ?`).get(tid(req), name)) throw new HttpError(409, `O tema "${name}" já existe.`);
+  if ((await db.prepare(`SELECT COUNT(*) n FROM clipping_topics WHERE tenant_id = ?`).get(tid(req)) as any).n >= MAX_TOPICS) throw bad(`Limite de ${MAX_TOPICS} temas.`);
+  if (await db.prepare(`SELECT 1 FROM clipping_topics WHERE tenant_id = ? AND name = ?`).get(tid(req), name)) throw new HttpError(409, `O tema "${name}" já existe.`);
   const id = crypto.randomUUID();
-  db.prepare(`INSERT INTO clipping_topics (id, tenant_id, name, terms, exclude_terms) VALUES (?, ?, ?, ?, ?)`).run(id, tid(req), name, JSON.stringify(terms), JSON.stringify(excludes));
-  audit({ ...actor(req), action: 'clipping.topic_created', target: name });
+  await db.prepare(`INSERT INTO clipping_topics (id, tenant_id, name, terms, exclude_terms) VALUES (?, ?, ?, ?, ?)`).run(id, tid(req), name, JSON.stringify(terms), JSON.stringify(excludes));
+  await audit({ ...actor(req), action: 'clipping.topic_created', target: name });
   res.status(201).json({ id });
 });
 
-clippingRouter.patch('/topics/:id', (req, res) => {
+clippingRouter.patch('/topics/:id', async (req, res) => {
   requireManager(req);
-  const cur = db.prepare(`SELECT * FROM clipping_topics WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
+  const cur = await db.prepare(`SELECT * FROM clipping_topics WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
   if (!cur) throw new HttpError(404, 'Tema não encontrado.');
   const b = req.body ?? {};
   const name = b.name === undefined ? cur.name : String(b.name).trim().slice(0, 60);
   if (!name) throw bad('Informe o nome do tema.');
-  if (db.prepare(`SELECT 1 FROM clipping_topics WHERE tenant_id = ? AND name = ? AND id <> ?`).get(tid(req), name, cur.id)) throw new HttpError(409, `O tema "${name}" já existe.`);
+  if (await db.prepare(`SELECT 1 FROM clipping_topics WHERE tenant_id = ? AND name = ? AND id <> ?`).get(tid(req), name, cur.id)) throw new HttpError(409, `O tema "${name}" já existe.`);
   const terms = b.terms === undefined ? JSON.parse(cur.terms) : cleanTerms(b.terms, 'termos');
   if (!terms.length) throw bad('Informe ao menos um termo de busca.');
   const excludes = b.excludeTerms === undefined ? JSON.parse(cur.exclude_terms) : cleanTerms(b.excludeTerms, 'termos excluídos');
   const active = b.active === undefined ? cur.active : b.active ? 1 : 0;
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    db.prepare(`UPDATE clipping_topics SET name = ?, terms = ?, exclude_terms = ?, active = ? WHERE id = ?`).run(name, JSON.stringify(terms), JSON.stringify(excludes), active, cur.id);
+  await tx(async () => {
+    await db.prepare(`UPDATE clipping_topics SET name = ?, terms = ?, exclude_terms = ?, active = ? WHERE id = ?`).run(name, JSON.stringify(terms), JSON.stringify(excludes), active, cur.id);
     if (name !== cur.name) {
       // keep collected items pointing at the renamed topic
-      const rows = db.prepare(`SELECT ci.id, ci.topics FROM clipping_items ci WHERE ci.tenant_id = ? AND EXISTS (SELECT 1 FROM json_each(ci.topics) j WHERE j.value = ?)`).all(tid(req), cur.name) as any[];
+      const rows = await db.prepare(`SELECT ci.id, ci.topics FROM clipping_items ci WHERE ci.tenant_id = ? AND EXISTS (SELECT 1 FROM json_each(ci.topics) j WHERE j.value = ?)`).all(tid(req), cur.name) as any[];
       const upd = db.prepare(`UPDATE clipping_items SET topics = ? WHERE id = ?`);
-      rows.forEach((r) => upd.run(JSON.stringify([...new Set((JSON.parse(r.topics) as string[]).map((t) => (t === cur.name ? name : t)))]), r.id));
+      for (const r of rows) await upd.run(JSON.stringify([...new Set((JSON.parse(r.topics) as string[]).map((t) => (t === cur.name ? name : t)))]), r.id);
     }
-    db.exec('COMMIT');
-  } catch (e) {
-    db.exec('ROLLBACK');
-    throw e;
-  }
-  audit({ ...actor(req), action: 'clipping.topic_updated', target: name });
+  });
+  await audit({ ...actor(req), action: 'clipping.topic_updated', target: name });
   res.json({ ok: true });
 });
 
-clippingRouter.delete('/topics/:id', (req, res) => {
+clippingRouter.delete('/topics/:id', async (req, res) => {
   requireManager(req);
-  const cur = db.prepare(`SELECT * FROM clipping_topics WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
+  const cur = await db.prepare(`SELECT * FROM clipping_topics WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
   if (!cur) throw new HttpError(404, 'Tema não encontrado.');
-  db.prepare(`DELETE FROM clipping_topics WHERE id = ?`).run(cur.id);
-  audit({ ...actor(req), action: 'clipping.topic_deleted', target: cur.name });
+  await db.prepare(`DELETE FROM clipping_topics WHERE id = ?`).run(cur.id);
+  await audit({ ...actor(req), action: 'clipping.topic_deleted', target: cur.name });
   res.json({ ok: true });
 });
 
@@ -515,30 +506,30 @@ clippingRouter.post(
     requireManager(req);
     const url = String(req.body?.url ?? '').trim();
     if (!url) throw bad('Informe o endereço do site ou do feed.');
-    if ((db.prepare(`SELECT COUNT(*) n FROM clipping_sources WHERE tenant_id = ?`).get(tid(req)) as any).n >= MAX_SOURCES) throw bad(`Limite de ${MAX_SOURCES} sites.`);
+    if ((await db.prepare(`SELECT COUNT(*) n FROM clipping_sources WHERE tenant_id = ?`).get(tid(req)) as any).n >= MAX_SOURCES) throw bad(`Limite de ${MAX_SOURCES} sites.`);
     let found;
     try {
       found = await discoverFeed(/^https?:\/\//i.test(url) ? url : `https://${url}`);
     } catch (e) {
       throw bad(e instanceof FetchError ? e.message : `Não foi possível acessar o site (${(e as Error).message}).`);
     }
-    if (db.prepare(`SELECT 1 FROM clipping_sources WHERE tenant_id = ? AND feed_url = ?`).get(tid(req), found.feedUrl)) throw new HttpError(409, 'Este site já está cadastrado.');
+    if (await db.prepare(`SELECT 1 FROM clipping_sources WHERE tenant_id = ? AND feed_url = ?`).get(tid(req), found.feedUrl)) throw new HttpError(409, 'Este site já está cadastrado.');
     const name = String(req.body?.name ?? '').trim().slice(0, 80) || found.title || domainOf(found.siteUrl);
     const id = crypto.randomUUID();
-    db.prepare(`INSERT INTO clipping_sources (id, tenant_id, name, site_url, feed_url, capture_all, last_status) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+    await db.prepare(`INSERT INTO clipping_sources (id, tenant_id, name, site_url, feed_url, capture_all, last_status) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
       id, tid(req), name, found.siteUrl, found.feedUrl, req.body?.captureAll ? 1 : 0, `feed encontrado · ${found.count} itens`
     );
-    audit({ ...actor(req), action: 'clipping.source_created', target: found.feedUrl });
+    await audit({ ...actor(req), action: 'clipping.source_created', target: found.feedUrl });
     res.status(201).json({ id, name, feedUrl: found.feedUrl, items: found.count });
   })
 );
 
-clippingRouter.patch('/sources/:id', (req, res) => {
+clippingRouter.patch('/sources/:id', async (req, res) => {
   requireManager(req);
-  const cur = db.prepare(`SELECT * FROM clipping_sources WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
+  const cur = await db.prepare(`SELECT * FROM clipping_sources WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
   if (!cur) throw new HttpError(404, 'Site não encontrado.');
   const b = req.body ?? {};
-  db.prepare(`UPDATE clipping_sources SET name = ?, active = ?, capture_all = ? WHERE id = ?`).run(
+  await db.prepare(`UPDATE clipping_sources SET name = ?, active = ?, capture_all = ? WHERE id = ?`).run(
     b.name === undefined ? cur.name : String(b.name).trim().slice(0, 80) || cur.name,
     b.active === undefined ? cur.active : b.active ? 1 : 0,
     b.captureAll === undefined ? cur.capture_all : b.captureAll ? 1 : 0,
@@ -547,23 +538,23 @@ clippingRouter.patch('/sources/:id', (req, res) => {
   res.json({ ok: true });
 });
 
-clippingRouter.delete('/sources/:id', (req, res) => {
+clippingRouter.delete('/sources/:id', async (req, res) => {
   requireManager(req);
-  const cur = db.prepare(`SELECT * FROM clipping_sources WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
+  const cur = await db.prepare(`SELECT * FROM clipping_sources WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
   if (!cur) throw new HttpError(404, 'Site não encontrado.');
-  db.prepare(`DELETE FROM clipping_sources WHERE id = ?`).run(cur.id);
-  audit({ ...actor(req), action: 'clipping.source_deleted', target: cur.feed_url });
+  await db.prepare(`DELETE FROM clipping_sources WHERE id = ?`).run(cur.id);
+  await audit({ ...actor(req), action: 'clipping.source_deleted', target: cur.feed_url });
   res.json({ ok: true });
 });
 
-clippingRouter.post('/collect', (req, res) => {
+clippingRouter.post('/collect', async (req, res) => {
   requireManager(req);
   const t = tid(req);
   if (isRunning(t)) throw new HttpError(409, 'Já existe uma coleta em andamento.');
-  const has = db.prepare(`SELECT (SELECT COUNT(*) FROM clipping_topics WHERE tenant_id = ? AND active = 1) + (SELECT COUNT(*) FROM clipping_sources WHERE tenant_id = ? AND active = 1) n`).get(t, t) as any;
+  const has = await db.prepare(`SELECT (SELECT COUNT(*) FROM clipping_topics WHERE tenant_id = ? AND active = 1) + (SELECT COUNT(*) FROM clipping_sources WHERE tenant_id = ? AND active = 1) n`).get(t, t) as any;
   if (!has.n) throw bad('Cadastre ao menos um tema ou site antes de coletar.');
   void runCollection(t, 'manual');
-  audit({ ...actor(req), action: 'clipping.collect_started' });
+  await audit({ ...actor(req), action: 'clipping.collect_started' });
   res.json({ started: true });
 });
 
@@ -589,7 +580,7 @@ function itemFilter(req: Request, { ignoreSentiment = false } = {}) {
   const q = String(qy.q ?? '').trim();
   if (q) {
     const like = `%${q.replace(/[%_]/g, '')}%`;
-    where.push('(ci.title LIKE ? OR ci.summary LIKE ? OR ci.source_name LIKE ?)');
+    where.push('(ci.title ILIKE ? OR ci.summary ILIKE ? OR ci.source_name ILIKE ?)');
     args.push(like, like, like);
   }
   for (const [param, col] of [['topic', 'topics'], ['theme', 'themes']] as const) {
@@ -634,12 +625,12 @@ const publicItem = (r: any) => ({
   archived: !!r.archived,
 });
 
-clippingRouter.get('/items', (req, res) => {
+clippingRouter.get('/items', async (req, res) => {
   const { sql, args } = itemFilter(req);
   const limit = Math.min(Math.max(Number(req.query.limit) || 30, 1), 100);
   const offset = Math.max(Number(req.query.offset) || 0, 0);
-  const total = (db.prepare(`SELECT COUNT(*) n FROM clipping_items ci WHERE ${sql}`).get(...args) as any).n;
-  const rows = db
+  const total = (await db.prepare(`SELECT COUNT(*) n FROM clipping_items ci WHERE ${sql}`).get(...args) as any).n;
+  const rows = await db
     .prepare(
       `SELECT ci.*, u.name AS rated_by_name FROM clipping_items ci LEFT JOIN users u ON u.id = ci.sentiment_user_id
         WHERE ${sql} ORDER BY ci.published_at DESC LIMIT ? OFFSET ?`
@@ -648,12 +639,12 @@ clippingRouter.get('/items', (req, res) => {
   res.json({ total, items: rows.map(publicItem) });
 });
 
-function setSentiment(req: Request, ids: string[], sentiment: Sentiment | null) {
+async function setSentiment(req: Request, ids: string[], sentiment: Sentiment | null) {
   const upd = db.prepare(
-    `UPDATE clipping_items SET sentiment_manual = ?, sentiment_user_id = ?, sentiment_at = CASE WHEN ? IS NULL THEN NULL ELSE datetime('now') END WHERE id = ? AND tenant_id = ?`
+    `UPDATE clipping_items SET sentiment_manual = ?, sentiment_user_id = ?, sentiment_at = CASE WHEN ?::text IS NULL THEN NULL ELSE datetime('now') END WHERE id = ? AND tenant_id = ?`
   );
   let n = 0;
-  for (const id of ids) n += Number(upd.run(sentiment, sentiment ? req.auth!.userId : null, sentiment, id, tid(req)).changes);
+  for (const id of ids) n += Number((await upd.run(sentiment, sentiment ? req.auth!.userId : null, sentiment, id, tid(req))).changes);
   return n;
 }
 const parseSentiment = (v: unknown): Sentiment | null => {
@@ -662,88 +653,83 @@ const parseSentiment = (v: unknown): Sentiment | null => {
   throw bad('Sentimento inválido.');
 };
 
-clippingRouter.patch('/items/:id', (req, res) => {
+clippingRouter.patch('/items/:id', async (req, res) => {
   const b = req.body ?? {};
-  const exists = db.prepare(`SELECT 1 FROM clipping_items WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req));
+  const exists = await db.prepare(`SELECT 1 FROM clipping_items WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req));
   if (!exists) throw new HttpError(404, 'Notícia não encontrada.');
-  if (b.sentiment !== undefined) setSentiment(req, [req.params.id], parseSentiment(b.sentiment));
+  if (b.sentiment !== undefined) await setSentiment(req, [req.params.id], parseSentiment(b.sentiment));
   if (b.archived !== undefined) {
     requireManager(req);
-    db.prepare(`UPDATE clipping_items SET archived = ? WHERE id = ? AND tenant_id = ?`).run(b.archived ? 1 : 0, req.params.id, tid(req));
+    await db.prepare(`UPDATE clipping_items SET archived = ? WHERE id = ? AND tenant_id = ?`).run(b.archived ? 1 : 0, req.params.id, tid(req));
   }
-  const r = db.prepare(`SELECT ci.*, u.name AS rated_by_name FROM clipping_items ci LEFT JOIN users u ON u.id = ci.sentiment_user_id WHERE ci.id = ?`).get(req.params.id);
+  const r = await db.prepare(`SELECT ci.*, u.name AS rated_by_name FROM clipping_items ci LEFT JOIN users u ON u.id = ci.sentiment_user_id WHERE ci.id = ?`).get(req.params.id);
   res.json(publicItem(r));
 });
 
-clippingRouter.post('/items/bulk', (req, res) => {
+clippingRouter.post('/items/bulk', async (req, res) => {
   const b = req.body ?? {};
   const ids: string[] = Array.isArray(b.ids) ? [...new Set<string>(b.ids.map(String))].slice(0, 500) : [];
   if (!ids.length) throw bad('Nenhuma notícia selecionada.');
   let changed = 0;
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    if (b.sentiment !== undefined) changed = setSentiment(req, ids, parseSentiment(b.sentiment));
+  await tx(async () => {
+    if (b.sentiment !== undefined) changed = await setSentiment(req, ids, parseSentiment(b.sentiment));
     if (b.archived !== undefined) {
       requireManager(req);
       const upd = db.prepare(`UPDATE clipping_items SET archived = ? WHERE id = ? AND tenant_id = ?`);
       changed = 0;
-      for (const id of ids) changed += Number(upd.run(b.archived ? 1 : 0, id, tid(req)).changes);
+      for (const id of ids) changed += Number((await upd.run(b.archived ? 1 : 0, id, tid(req))).changes);
     }
-    db.exec('COMMIT');
-  } catch (e) {
-    db.exec('ROLLBACK');
-    throw e;
-  }
+  });
   res.json({ changed });
 });
 
-clippingRouter.get('/facets', (req, res) => {
+clippingRouter.get('/facets', async (req, res) => {
   const t = tid(req);
-  const facet = (sqlExpr: string) =>
-    db.prepare(sqlExpr).all(t) as { value: string; count: number }[];
+  const facet = async (sqlExpr: string) =>
+    await db.prepare(sqlExpr).all(t) as { value: string; count: number }[];
   res.json({
-    topics: facet(`SELECT j.value AS value, COUNT(*) AS count FROM clipping_items ci, json_each(ci.topics) j WHERE ci.tenant_id = ? AND ci.archived = 0 GROUP BY j.value ORDER BY count DESC`),
-    themes: facet(`SELECT j.value AS value, COUNT(*) AS count FROM clipping_items ci, json_each(ci.themes) j WHERE ci.tenant_id = ? AND ci.archived = 0 GROUP BY j.value ORDER BY count DESC`),
-    sources: facet(`SELECT source_name AS value, COUNT(*) AS count FROM clipping_items WHERE tenant_id = ? AND archived = 0 GROUP BY source_name ORDER BY count DESC LIMIT 150`),
+    topics: await facet(`SELECT j.value AS value, COUNT(*) AS count FROM clipping_items ci, json_each(ci.topics) j WHERE ci.tenant_id = ? AND ci.archived = 0 GROUP BY j.value ORDER BY count DESC`),
+    themes: await facet(`SELECT j.value AS value, COUNT(*) AS count FROM clipping_items ci, json_each(ci.themes) j WHERE ci.tenant_id = ? AND ci.archived = 0 GROUP BY j.value ORDER BY count DESC`),
+    sources: await facet(`SELECT source_name AS value, COUNT(*) AS count FROM clipping_items WHERE tenant_id = ? AND archived = 0 GROUP BY source_name ORDER BY count DESC LIMIT 150`),
   });
 });
 
-clippingRouter.get('/dashboard', (req, res) => {
+clippingRouter.get('/dashboard', async (req, res) => {
   // Sentiment filter is ignored here so the dashboard always shows the full split.
   const { sql, args } = itemFilter(req, { ignoreSentiment: true });
-  const totals = db
+  const totals = await db
     .prepare(
       `SELECT COUNT(*) total,
-              SUM(${EFFECTIVE} = 'bom') bom, SUM(${EFFECTIVE} = 'neutro') neutro, SUM(${EFFECTIVE} = 'ruim') ruim,
-              SUM(ci.sentiment_manual IS NOT NULL) manual,
+              COUNT(*) FILTER (WHERE ${EFFECTIVE} = 'bom') bom, COUNT(*) FILTER (WHERE ${EFFECTIVE} = 'neutro') neutro, COUNT(*) FILTER (WHERE ${EFFECTIVE} = 'ruim') ruim,
+              COUNT(*) FILTER (WHERE ci.sentiment_manual IS NOT NULL) manual,
               COUNT(DISTINCT ci.source_name) sources
          FROM clipping_items ci WHERE ${sql}`
     )
     .get(...args) as any;
-  const daily = db
+  const daily = await db
     .prepare(
       `SELECT date(ci.published_at, 'localtime') AS day, ${EFFECTIVE} AS sentiment, COUNT(*) AS count
          FROM clipping_items ci WHERE ${sql} GROUP BY day, sentiment ORDER BY day`
     )
     .all(...args);
-  const byTopic = db
+  const byTopic = await db
     .prepare(
-      `SELECT j.value AS name, COUNT(*) total, SUM(${EFFECTIVE} = 'bom') bom, SUM(${EFFECTIVE} = 'neutro') neutro, SUM(${EFFECTIVE} = 'ruim') ruim
+      `SELECT j.value AS name, COUNT(*) total, COUNT(*) FILTER (WHERE ${EFFECTIVE} = 'bom') bom, COUNT(*) FILTER (WHERE ${EFFECTIVE} = 'neutro') neutro, COUNT(*) FILTER (WHERE ${EFFECTIVE} = 'ruim') ruim
          FROM clipping_items ci, json_each(ci.topics) j WHERE ${sql} GROUP BY j.value ORDER BY total DESC LIMIT 8`
     )
     .all(...args);
-  const bySource = db
+  const bySource = await db
     .prepare(
-      `SELECT ci.source_name AS name, COUNT(*) total, SUM(${EFFECTIVE} = 'ruim') ruim
+      `SELECT ci.source_name AS name, COUNT(*) total, COUNT(*) FILTER (WHERE ${EFFECTIVE} = 'ruim') ruim
          FROM clipping_items ci WHERE ${sql} GROUP BY ci.source_name ORDER BY total DESC LIMIT 8`
     )
     .all(...args);
-  const byTheme = db
+  const byTheme = await db
     .prepare(
       `SELECT j.value AS name, COUNT(*) total FROM clipping_items ci, json_each(ci.themes) j WHERE ${sql} GROUP BY j.value ORDER BY total DESC LIMIT 8`
     )
     .all(...args);
-  const lastRun = db.prepare(`SELECT * FROM clipping_runs WHERE tenant_id = ? ORDER BY started_at DESC LIMIT 1`).get(tid(req)) as any;
+  const lastRun = await db.prepare(`SELECT * FROM clipping_runs WHERE tenant_id = ? ORDER BY started_at DESC LIMIT 1`).get(tid(req)) as any;
   res.json({
     totals: {
       total: totals.total ?? 0,

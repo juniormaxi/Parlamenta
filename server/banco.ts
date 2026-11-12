@@ -9,7 +9,7 @@ import path from 'node:path';
 import express, { type Request, type Response, type NextFunction } from 'express';
 import ExcelJS from 'exceljs';
 import mammoth from 'mammoth';
-import { db, audit, tenantStorageBytes, DATA_DIR } from './db';
+import { db, tx, audit, tenantStorageBytes, DATA_DIR } from './db';
 import { HttpError, bad } from './http';
 import { taxonomyRouter, categoryMap, tagMap, resolveTaxonomy, createCategoryIfMissing, createTagIfMissing } from './taxonomy';
 import { THEMES, OCCASIONS, keywordThemes, aiAvailable, extractTextWithAI, classifyWithAI } from './ai';
@@ -40,9 +40,9 @@ function requireManager(req: Request) {
   }
 }
 
-function assertQuota(tenantId: string, extraBytes: number) {
-  const t = db.prepare(`SELECT storage_quota_mb FROM tenants WHERE id = ?`).get(tenantId) as any;
-  const used = tenantStorageBytes().get(tenantId) ?? 0;
+async function assertQuota(tenantId: string, extraBytes: number) {
+  const t = await db.prepare(`SELECT storage_quota_mb FROM tenants WHERE id = ?`).get(tenantId) as any;
+  const used = (await tenantStorageBytes()).get(tenantId) ?? 0;
   if (used + extraBytes > t.storage_quota_mb * 1024 * 1024) {
     throw new HttpError(413, 'Cota de armazenamento do gabinete esgotada. Solicite ampliação ao administrador da plataforma.');
   }
@@ -193,21 +193,21 @@ function normalizeContact(raw: Record<string, unknown>): { value: ContactInput; 
   return { value, errors };
 }
 
-function findDuplicate(tenantId: string, c: ContactInput): any {
+async function findDuplicate(tenantId: string, c: ContactInput): Promise<any> {
   const keys: [string, string][] = [];
   if (c.email) keys.push(['email', c.email]);
   if (c.phone) keys.push(['phone', c.phone], ['whatsapp', c.phone]);
   if (c.whatsapp) keys.push(['whatsapp', c.whatsapp], ['phone', c.whatsapp]);
   for (const [col, val] of keys) {
-    const row = db.prepare(`SELECT * FROM contacts WHERE tenant_id = ? AND ${col} = ? LIMIT 1`).get(tenantId, val);
+    const row = await db.prepare(`SELECT * FROM contacts WHERE tenant_id = ? AND ${col} = ? LIMIT 1`).get(tenantId, val);
     if (row) return row;
   }
   return null;
 }
 
-function insertContact(tenantId: string, c: ContactInput, source: string, userId: string): string {
+async function insertContact(tenantId: string, c: ContactInput, source: string, userId: string): Promise<string> {
   const id = crypto.randomUUID();
-  db.prepare(
+  await db.prepare(
     `INSERT INTO contacts (id, tenant_id, ${TEXT_FIELDS.join(', ')}, tags, consent_whatsapp, consent_email, source, created_by)
      VALUES (?, ?, ${TEXT_FIELDS.map(() => '?').join(', ')}, ?, ?, ?, ?, ?)`
   ).run(id, tenantId, ...TEXT_FIELDS.map((f) => c[f] as string), JSON.stringify(c.tags), c.consent_whatsapp, c.consent_email, source, userId);
@@ -215,7 +215,7 @@ function insertContact(tenantId: string, c: ContactInput, source: string, userId
 }
 
 /** Fills empty fields of an existing contact and merges tags; never erases data. */
-function mergeContact(existing: any, c: ContactInput) {
+async function mergeContact(existing: any, c: ContactInput) {
   const sets: string[] = [];
   const vals: any[] = [];
   for (const f of TEXT_FIELDS) {
@@ -225,9 +225,9 @@ function mergeContact(existing: any, c: ContactInput) {
     }
   }
   const tags = uniq([...JSON.parse(existing.tags || '[]'), ...c.tags]);
-  sets.push('tags = ?', 'consent_whatsapp = MAX(consent_whatsapp, ?)', 'consent_email = MAX(consent_email, ?)', "updated_at = datetime('now')");
+  sets.push('tags = ?', 'consent_whatsapp = GREATEST(consent_whatsapp, ?)', 'consent_email = GREATEST(consent_email, ?)', "updated_at = datetime('now')");
   vals.push(JSON.stringify(tags), c.consent_whatsapp, c.consent_email);
-  db.prepare(`UPDATE contacts SET ${sets.join(', ')} WHERE id = ? AND tenant_id = ?`).run(...vals, existing.id, existing.tenant_id);
+  await db.prepare(`UPDATE contacts SET ${sets.join(', ')} WHERE id = ? AND tenant_id = ?`).run(...vals, existing.id, existing.tenant_id);
 }
 
 const publicContact = (r: any) => ({
@@ -274,7 +274,7 @@ function contactFilter(req: Request) {
   if (q) {
     const like = `%${q.replace(/[%_]/g, '')}%`;
     const digits = onlyDigits(q);
-    where.push(`(c.name LIKE ? OR c.email LIKE ? OR c.neighborhood LIKE ? OR c.organization LIKE ?${digits.length >= 4 ? ' OR c.phone LIKE ? OR c.whatsapp LIKE ?' : ''})`);
+    where.push(`(c.name ILIKE ? OR c.email ILIKE ? OR c.neighborhood ILIKE ? OR c.organization ILIKE ?${digits.length >= 4 ? ' OR c.phone ILIKE ? OR c.whatsapp ILIKE ?' : ''})`);
     args.push(like, like, like, like);
     if (digits.length >= 4) args.push(`%${digits}%`, `%${digits}%`);
   }
@@ -295,27 +295,27 @@ function contactFilter(req: Request) {
   return { sql: where.join(' AND '), args };
 }
 
-bancoRouter.get('/contacts', (req, res) => {
+bancoRouter.get('/contacts', async (req, res) => {
   const { sql, args } = contactFilter(req);
   const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
   const offset = Math.max(Number(req.query.offset) || 0, 0);
-  const total = (db.prepare(`SELECT COUNT(*) AS n FROM contacts c WHERE ${sql}`).get(...args) as any).n;
-  const rows = db.prepare(`SELECT * FROM contacts c WHERE ${sql} ORDER BY c.name COLLATE NOCASE LIMIT ? OFFSET ?`).all(...args, limit, offset);
+  const total = (await db.prepare(`SELECT COUNT(*) AS n FROM contacts c WHERE ${sql}`).get(...args) as any).n;
+  const rows = await db.prepare(`SELECT * FROM contacts c WHERE ${sql} ORDER BY lower(c.name) LIMIT ? OFFSET ?`).all(...args, limit, offset);
   res.json({ total, items: rows.map(publicContact) });
 });
 
-bancoRouter.get('/contacts/facets', (req, res) => {
+bancoRouter.get('/contacts/facets', async (req, res) => {
   const t = tid(req);
-  const facet = (col: string) =>
-    db.prepare(`SELECT ${col} AS value, COUNT(*) AS count FROM contacts WHERE tenant_id = ? AND ${col} <> '' GROUP BY ${col} ORDER BY count DESC LIMIT 200`).all(t);
-  const tags = db
+  const facet = async (col: string) =>
+    await db.prepare(`SELECT ${col} AS value, COUNT(*) AS count FROM contacts WHERE tenant_id = ? AND ${col} <> '' GROUP BY ${col} ORDER BY count DESC LIMIT 200`).all(t);
+  const tags = await db
     .prepare(`SELECT j.value AS value, COUNT(*) AS count FROM contacts c, json_each(c.tags) j WHERE c.tenant_id = ? GROUP BY j.value ORDER BY count DESC LIMIT 200`)
     .all(t);
-  const totals = db
+  const totals = await db
     .prepare(
       `SELECT COUNT(*) AS total,
-              SUM(consent_whatsapp = 1 AND whatsapp <> '') AS whatsapp,
-              SUM(consent_email = 1 AND email <> '') AS email
+              COUNT(*) FILTER (WHERE consent_whatsapp = 1 AND whatsapp <> '') AS whatsapp,
+              COUNT(*) FILTER (WHERE consent_email = 1 AND email <> '') AS email
          FROM contacts WHERE tenant_id = ?`
     )
     .get(t) as any;
@@ -323,48 +323,48 @@ bancoRouter.get('/contacts/facets', (req, res) => {
     total: totals.total ?? 0,
     withWhatsappConsent: totals.whatsapp ?? 0,
     withEmailConsent: totals.email ?? 0,
-    cities: facet('city'),
-    categories: facet('category'),
+    cities: await facet('city'),
+    categories: await facet('category'),
     tags,
-    categoryOptions: [...categoryMap(t).values()].sort((a, b) => a.localeCompare(b, 'pt-BR')),
-    tagOptions: [...tagMap(t).values()].sort((a, b) => a.localeCompare(b, 'pt-BR')),
+    categoryOptions: [...(await categoryMap(t)).values()].sort((a, b) => a.localeCompare(b, 'pt-BR')),
+    tagOptions: [...(await tagMap(t)).values()].sort((a, b) => a.localeCompare(b, 'pt-BR')),
   });
 });
 
-bancoRouter.post('/contacts', (req, res) => {
+bancoRouter.post('/contacts', async (req, res) => {
   const { value, errors } = normalizeContact(fromBody(req.body ?? {}));
   if (errors.length) throw bad(errors.join('; '));
-  Object.assign(value, resolveTaxonomy(tid(req), value.category, value.tags));
-  const dup = findDuplicate(tid(req), value);
+  Object.assign(value, await resolveTaxonomy(tid(req), value.category, value.tags));
+  const dup = await findDuplicate(tid(req), value);
   if (dup) throw new HttpError(409, `Já existe um contato com este telefone/e-mail: ${dup.name}.`);
-  assertQuota(tid(req), 1024);
-  const id = insertContact(tid(req), value, 'manual', req.auth!.userId);
-  audit({ ...actor(req), action: 'contact.created', target: value.name });
-  res.status(201).json(publicContact(db.prepare(`SELECT * FROM contacts WHERE id = ?`).get(id)));
+  await assertQuota(tid(req), 1024);
+  const id = await insertContact(tid(req), value, 'manual', req.auth!.userId);
+  await audit({ ...actor(req), action: 'contact.created', target: value.name });
+  res.status(201).json(publicContact(await db.prepare(`SELECT * FROM contacts WHERE id = ?`).get(id)));
 });
 
-bancoRouter.patch('/contacts/:id', (req, res) => {
-  const existing = db.prepare(`SELECT * FROM contacts WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
+bancoRouter.patch('/contacts/:id', async (req, res) => {
+  const existing = await db.prepare(`SELECT * FROM contacts WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
   if (!existing) throw new HttpError(404, 'Contato não encontrado.');
   const { value, errors } = normalizeContact(fromBody({ ...publicContact(existing), ...(req.body ?? {}) }));
   if (errors.length) throw bad(errors.join('; '));
-  Object.assign(value, resolveTaxonomy(tid(req), value.category, value.tags));
-  const dup = findDuplicate(tid(req), value);
+  Object.assign(value, await resolveTaxonomy(tid(req), value.category, value.tags));
+  const dup = await findDuplicate(tid(req), value);
   if (dup && dup.id !== existing.id) throw new HttpError(409, `Telefone/e-mail já pertence a outro contato: ${dup.name}.`);
-  db.prepare(
+  await db.prepare(
     `UPDATE contacts SET ${TEXT_FIELDS.map((f) => `${f} = ?`).join(', ')}, tags = ?, consent_whatsapp = ?, consent_email = ?, updated_at = datetime('now')
       WHERE id = ? AND tenant_id = ?`
   ).run(...TEXT_FIELDS.map((f) => value[f] as string), JSON.stringify(value.tags), value.consent_whatsapp, value.consent_email, existing.id, tid(req));
-  audit({ ...actor(req), action: 'contact.updated', target: value.name });
-  res.json(publicContact(db.prepare(`SELECT * FROM contacts WHERE id = ?`).get(existing.id)));
+  await audit({ ...actor(req), action: 'contact.updated', target: value.name });
+  res.json(publicContact(await db.prepare(`SELECT * FROM contacts WHERE id = ?`).get(existing.id)));
 });
 
-bancoRouter.delete('/contacts/:id', (req, res) => {
+bancoRouter.delete('/contacts/:id', async (req, res) => {
   requireManager(req);
-  const existing = db.prepare(`SELECT name FROM contacts WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
+  const existing = await db.prepare(`SELECT name FROM contacts WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
   if (!existing) throw new HttpError(404, 'Contato não encontrado.');
-  db.prepare(`DELETE FROM contacts WHERE id = ? AND tenant_id = ?`).run(req.params.id, tid(req));
-  audit({ ...actor(req), action: 'contact.deleted', target: existing.name });
+  await db.prepare(`DELETE FROM contacts WHERE id = ? AND tenant_id = ?`).run(req.params.id, tid(req));
+  await audit({ ...actor(req), action: 'contact.deleted', target: existing.name });
   res.json({ ok: true });
 });
 
@@ -372,27 +372,22 @@ bancoRouter.delete('/contacts/:id', (req, res) => {
  * Bulk delete. Either explicit `ids`, or `allMatching: true` to delete every contact matching
  * the same filters as GET /contacts (passed in the query string). Always scoped to the tenant.
  */
-bancoRouter.post('/contacts/bulk-delete', (req, res) => {
+bancoRouter.post('/contacts/bulk-delete', async (req, res) => {
   requireManager(req);
   const b = req.body ?? {};
   let deleted = 0;
-  db.exec('BEGIN IMMEDIATE');
-  try {
+  await tx(async () => {
     if (b.allMatching === true) {
       const { sql, args } = contactFilter(req);
-      deleted = Number(db.prepare(`DELETE FROM contacts AS c WHERE ${sql}`).run(...args).changes);
+      deleted = Number((await db.prepare(`DELETE FROM contacts AS c WHERE ${sql}`).run(...args)).changes);
     } else {
       const ids: string[] = Array.isArray(b.ids) ? [...new Set<string>(b.ids.map(String))].slice(0, 5000) : [];
       if (!ids.length) throw bad('Nenhum contato selecionado.');
       const del = db.prepare(`DELETE FROM contacts WHERE id = ? AND tenant_id = ?`);
-      for (const id of ids) deleted += Number(del.run(id, tid(req)).changes);
+      for (const id of ids) deleted += Number((await del.run(id, tid(req))).changes);
     }
-    db.exec('COMMIT');
-  } catch (e) {
-    db.exec('ROLLBACK');
-    throw e;
-  }
-  audit({
+  });
+  await audit({
     ...actor(req),
     action: 'contacts.bulk_deleted',
     target: `${deleted} contato(s)`,
@@ -497,8 +492,8 @@ Object.assign(HEADER_ALIASES, {
 bancoRouter.get(
   '/import/template',
   ah(async (req, res) => {
-    const cats = [...categoryMap(tid(req)).values()].sort((a, b) => a.localeCompare(b, 'pt-BR'));
-    const tagNames = [...tagMap(tid(req)).values()].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+    const cats = [...(await categoryMap(tid(req))).values()].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+    const tagNames = [...(await tagMap(tid(req))).values()].sort((a, b) => a.localeCompare(b, 'pt-BR'));
     const wb = new ExcelJS.Workbook();
     wb.creator = 'Parlamenta';
     const ws = wb.addWorksheet('Contatos', { views: [{ state: 'frozen', ySplit: 1 }] });
@@ -650,11 +645,22 @@ bancoRouter.post(
     const dataRows = rows.slice(1).filter((r) => r.some((v) => String(v ?? '').trim()));
     if (dataRows.length > MAX_IMPORT_ROWS) throw bad(`Limite de ${MAX_IMPORT_ROWS} linhas por importação.`);
 
-    const cats = categoryMap(tid(req));
-    const tagsM = tagMap(tid(req));
+    const cats = await categoryMap(tid(req));
+    const tagsM = await tagMap(tid(req));
     const unknownCategories = new Map<string, string>();
     const unknownTags = new Map<string, string>();
     const seen = new Set<string>();
+    // One query instead of one lookup per row: email/phone/whatsapp -> existing contact name.
+    const existingByKey = new Map<string, string>();
+    for (const e of await db.prepare(`SELECT name, email, phone, whatsapp FROM contacts WHERE tenant_id = ?`).all(tid(req))) {
+      if (e.email) existingByKey.set(`email:${e.email}`, e.name);
+      for (const p of [e.phone, e.whatsapp]) if (p) existingByKey.set(`tel:${p}`, e.name);
+    }
+    const findExisting = (c: ContactInput) =>
+      (c.email && existingByKey.get(`email:${c.email}`)) ||
+      (c.phone && existingByKey.get(`tel:${c.phone}`)) ||
+      (c.whatsapp && existingByKey.get(`tel:${c.whatsapp}`)) ||
+      undefined;
     const parsed = dataRows.map((r, i) => {
       const raw: Record<string, unknown> = {};
       header.forEach((k, ci) => {
@@ -679,8 +685,8 @@ bancoRouter.post(
       const keys = [value.email, value.phone, value.whatsapp].filter(Boolean);
       if (keys.some((k) => seen.has(k))) return { line, status: 'invalid' as const, errors: ['Duplicado dentro da planilha'], value };
       keys.forEach((k) => seen.add(k));
-      const dup = findDuplicate(tid(req), value);
-      return { line, status: dup ? ('duplicate' as const) : ('new' as const), errors: [], value, existing: dup ? dup.name : undefined };
+      const existing = findExisting(value);
+      return { line, status: existing ? ('duplicate' as const) : ('new' as const), errors: [], value, existing };
     });
 
     const id = crypto.randomUUID();
@@ -691,8 +697,8 @@ bancoRouter.post(
       invalid: parsed.filter((p) => p.status === 'invalid').length,
       ignored: parsed.filter((p) => p.status === 'ignored').length,
     };
-    db.prepare(`DELETE FROM contact_imports WHERE tenant_id = ? AND status = 'preview' AND created_at < datetime('now','-1 day')`).run(tid(req));
-    db.prepare(
+    await db.prepare(`DELETE FROM contact_imports WHERE tenant_id = ? AND status = 'preview' AND created_at < datetime('now','-1 day')`).run(tid(req));
+    await db.prepare(
       `INSERT INTO contact_imports (id, tenant_id, file_name, total_rows, valid_rows, rows_json, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)`
     ).run(id, tid(req), fileName, counts.total, counts.new + counts.duplicate, JSON.stringify(parsed), req.auth!.userId);
 
@@ -720,79 +726,76 @@ bancoRouter.post(
   })
 );
 
-bancoRouter.post('/import/:id/commit', (req, res) => {
+bancoRouter.post('/import/:id/commit', async (req, res) => {
   requireManager(req);
-  const imp = db.prepare(`SELECT * FROM contact_imports WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
+  const imp = await db.prepare(`SELECT * FROM contact_imports WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
   if (!imp) throw new HttpError(404, 'Importação não encontrada.');
   if (imp.status !== 'preview') throw bad('Esta importação já foi processada.');
   const policy = req.body?.duplicatePolicy === 'update' ? 'update' : 'skip';
   const createMissing = req.body?.createMissing !== false;
   const requested = uniq(splitTags(Array.isArray(req.body?.tags) ? req.body.tags.join(';') : req.body?.tags)).slice(0, 10);
   // List-wide tags and default category must already be registered.
-  const { tags: extraTags, category } = resolveTaxonomy(tid(req), String(req.body?.category ?? '').trim().slice(0, 60), requested);
-  const cats = categoryMap(tid(req));
-  const tagsM = tagMap(tid(req));
+  const { tags: extraTags, category } = await resolveTaxonomy(tid(req), String(req.body?.category ?? '').trim().slice(0, 60), requested);
+  const cats = await categoryMap(tid(req));
+  const tagsM = await tagMap(tid(req));
   const created = { categories: [] as string[], tags: [] as string[] };
-  const canonCategory = (name: string) => {
+  const canonCategory = async (name: string) => {
     if (!name) return '';
     const hit = cats.get(tkey(name));
     if (hit) return hit;
     if (!createMissing) return '';
-    createCategoryIfMissing(tid(req), name);
+    await createCategoryIfMissing(tid(req), name);
     cats.set(tkey(name), name);
     created.categories.push(name);
     return name;
   };
-  const canonTag = (name: string): string[] => {
+  const canonTag = async (name: string): Promise<string[]> => {
     const hit = tagsM.get(tkey(name));
     if (hit) return [hit];
     if (!createMissing) return [];
-    createTagIfMissing(tid(req), name);
+    await createTagIfMissing(tid(req), name);
     tagsM.set(tkey(name), name);
     created.tags.push(name);
     return [name];
   };
   const rows = JSON.parse(imp.rows_json) as { status: string; value: ContactInput | null }[];
   const valid = rows.filter((r) => r.value && (r.status === 'new' || r.status === 'duplicate'));
-  assertQuota(tid(req), valid.length * 400);
+  await assertQuota(tid(req), valid.length * 400);
 
   let inserted = 0;
   let updated = 0;
   let skipped = 0;
-  db.exec('BEGIN IMMEDIATE');
-  try {
+  await tx(async () => {
     for (const r of valid) {
-      const c = { ...r.value!, tags: uniq([...r.value!.tags.flatMap(canonTag), ...extraTags]), category: canonCategory(r.value!.category) };
+      const canonTags: string[] = [];
+      for (const t of r.value!.tags) canonTags.push(...(await canonTag(t)));
+      const c = { ...r.value!, tags: uniq([...canonTags, ...extraTags]), category: await canonCategory(r.value!.category) };
       if (category && !c.category) c.category = category;
-      const dup = findDuplicate(tid(req), c); // re-check: data may have changed since preview
+      const dup = await findDuplicate(tid(req), c); // re-check: data may have changed since preview
       if (!dup) {
-        insertContact(tid(req), c, `import:${imp.id}`, req.auth!.userId);
+        await insertContact(tid(req), c, `import:${imp.id}`, req.auth!.userId);
         inserted++;
       } else if (policy === 'update') {
-        mergeContact(dup, c);
+        await mergeContact(dup, c);
         updated++;
       } else skipped++;
     }
     skipped += rows.length - valid.length;
-    db.prepare(
+    await db.prepare(
       `UPDATE contact_imports SET status='committed', inserted=?, updated=?, skipped=?, tags=?, rows_json=NULL, committed_at=datetime('now') WHERE id=?`
     ).run(inserted, updated, skipped, JSON.stringify(extraTags), imp.id);
-    db.exec('COMMIT');
-  } catch (e) {
-    db.exec('ROLLBACK');
-    throw e;
-  }
-  audit({ ...actor(req), action: 'contacts.imported', target: imp.file_name, details: { inserted, updated, skipped, tags: extraTags, policy, created } });
+  });
+  await audit({ ...actor(req), action: 'contacts.imported', target: imp.file_name, details: { inserted, updated, skipped, tags: extraTags, policy, created } });
   res.json({ inserted, updated, skipped, created });
 });
 
-bancoRouter.delete('/import/:id', (req, res) => {
-  db.prepare(`UPDATE contact_imports SET status='discarded', rows_json=NULL WHERE id = ? AND tenant_id = ? AND status='preview'`).run(req.params.id, tid(req));
+bancoRouter.delete('/import/:id', async (req, res) => {
+  await db.prepare(`UPDATE contact_imports SET status='discarded', rows_json=NULL WHERE id = ? AND tenant_id = ? AND status='preview'`).run(req.params.id, tid(req));
   res.json({ ok: true });
 });
 
-bancoRouter.get('/import/history', (req, res) => {
-  const rows = db
+bancoRouter.get('/import/history', async (req, res) => {
+  const rows = await db
     .prepare(
       `SELECT i.id, i.file_name, i.status, i.total_rows, i.inserted, i.updated, i.skipped, i.tags, i.created_at, i.committed_at, u.name AS by_name
          FROM contact_imports i LEFT JOIN users u ON u.id = i.created_by
@@ -850,17 +853,17 @@ function validDate(v: unknown): string {
   return s;
 }
 
-bancoRouter.get('/speeches/meta', (_req, res) => {
+bancoRouter.get('/speeches/meta', async (_req, res) => {
   res.json({ themes: THEMES, occasions: OCCASIONS, aiAvailable: aiAvailable(), acceptedExtensions: Object.keys(EXT), maxUploadMb: MAX_SPEECH_BYTES / 1024 / 1024 });
 });
 
-bancoRouter.get('/speeches', (req, res) => {
+bancoRouter.get('/speeches', async (req, res) => {
   const where = ['s.tenant_id = ?'];
   const args: any[] = [tid(req)];
   const q = String(req.query.q ?? '').trim();
   if (q) {
     const like = `%${q.replace(/[%_]/g, '')}%`;
-    where.push('(s.title LIKE ? OR s.text LIKE ? OR s.summary LIKE ? OR s.keywords LIKE ? OR s.location LIKE ?)');
+    where.push('(s.title ILIKE ? OR s.text ILIKE ? OR s.summary ILIKE ? OR s.keywords ILIKE ? OR s.location ILIKE ?)');
     args.push(like, like, like, like, like);
   }
   const theme = String(req.query.theme ?? '').trim();
@@ -881,7 +884,7 @@ bancoRouter.get('/speeches', (req, res) => {
     where.push('s.speech_date <= ?');
     args.push(req.query.to);
   }
-  const rows = db
+  const rows = await db
     .prepare(
       `SELECT s.*, u.name AS created_by_name FROM speeches s LEFT JOIN users u ON u.id = s.created_by
         WHERE ${where.join(' AND ')} ORDER BY s.speech_date DESC, s.created_at DESC LIMIT 300`
@@ -890,22 +893,22 @@ bancoRouter.get('/speeches', (req, res) => {
   res.json(rows.map((r) => publicSpeech(r)));
 });
 
-bancoRouter.get('/speeches/:id', (req, res) => {
-  const r = db
+bancoRouter.get('/speeches/:id', async (req, res) => {
+  const r = await db
     .prepare(`SELECT s.*, u.name AS created_by_name FROM speeches s LEFT JOIN users u ON u.id = s.created_by WHERE s.id = ? AND s.tenant_id = ?`)
     .get(req.params.id, tid(req));
   if (!r) throw new HttpError(404, 'Discurso não encontrado.');
   res.json(publicSpeech(r, true));
 });
 
-bancoRouter.post('/speeches', (req, res) => {
+bancoRouter.post('/speeches', async (req, res) => {
   const b = req.body ?? {};
   const title = String(b.title ?? '').trim().slice(0, 200);
   if (!title) throw bad('Informe o título do discurso.');
   const occasion = String(b.occasion ?? '').trim().slice(0, 80);
   if (!occasion) throw bad('Informe a ocasião.');
   const id = crypto.randomUUID();
-  db.prepare(`INSERT INTO speeches (id, tenant_id, title, speech_date, occasion, location, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+  await db.prepare(`INSERT INTO speeches (id, tenant_id, title, speech_date, occasion, location, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
     id, tid(req), title, validDate(b.speechDate), occasion, String(b.location ?? '').trim().slice(0, 200), req.auth!.userId
   );
   res.status(201).json({ id });
@@ -914,7 +917,7 @@ bancoRouter.post('/speeches', (req, res) => {
 bancoRouter.put(
   '/speeches/:id/file',
   ah(async (req, res) => {
-    const s = db.prepare(`SELECT * FROM speeches WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
+    const s = await db.prepare(`SELECT * FROM speeches WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
     if (!s) throw new HttpError(404, 'Discurso não encontrado.');
     if (s.status !== 'awaiting_file') throw bad('Este discurso já recebeu um arquivo.');
     const fileName = fileNameHeader(req);
@@ -925,7 +928,7 @@ bancoRouter.put(
     const declared = Number(req.headers['content-length'] || 0);
     if (declared > MAX_SPEECH_BYTES) throw new HttpError(413, `Arquivo maior que ${MAX_SPEECH_BYTES / 1024 / 1024} MB.`);
     // Videos are discarded after transcription, so they only need temporary room.
-    if (info.kind !== 'video') assertQuota(tid(req), declared);
+    if (info.kind !== 'video') await assertQuota(tid(req), declared);
 
     const dest = speechPath({ tenant_id: s.tenant_id, id: s.id, file_name: fileName });
     const size = await streamToFile(req, dest, MAX_SPEECH_BYTES);
@@ -933,17 +936,17 @@ bancoRouter.put(
       fs.rmSync(dest, { force: true });
       throw bad('Arquivo vazio.');
     }
-    db.prepare(
+    await db.prepare(
       `UPDATE speeches SET file_name=?, mime_type=?, media_type=?, file_bytes=?, stored_bytes=?, file_kept=1, status='queued', status_detail='' WHERE id=?`
     ).run(fileName, info.mime, info.kind, size, info.kind === 'video' ? 0 : size, s.id);
-    audit({ ...actor(req), action: 'speech.uploaded', target: s.title, details: { fileName, size, kind: info.kind } });
+    await audit({ ...actor(req), action: 'speech.uploaded', target: s.title, details: { fileName, size, kind: info.kind } });
     enqueue(s.id);
     res.json({ ok: true });
   })
 );
 
-bancoRouter.patch('/speeches/:id', (req, res) => {
-  const s = db.prepare(`SELECT * FROM speeches WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
+bancoRouter.patch('/speeches/:id', async (req, res) => {
+  const s = await db.prepare(`SELECT * FROM speeches WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
   if (!s) throw new HttpError(404, 'Discurso não encontrado.');
   const b = req.body ?? {};
   const title = b.title === undefined ? s.title : String(b.title).trim().slice(0, 200) || s.title;
@@ -954,27 +957,27 @@ bancoRouter.patch('/speeches/:id', (req, res) => {
   const keywords = b.keywords === undefined ? s.keywords : JSON.stringify(uniq((b.keywords as unknown[]).map((k) => String(k).trim().slice(0, 60)).filter(Boolean)).slice(0, 20));
   const text = b.text === undefined ? s.text : String(b.text).slice(0, 5_000_000);
   const taggedBy = b.themes !== undefined || b.keywords !== undefined ? 'manual' : s.tagged_by;
-  db.prepare(`UPDATE speeches SET title=?, speech_date=?, occasion=?, location=?, themes=?, keywords=?, text=?, tagged_by=? WHERE id=?`).run(
+  await db.prepare(`UPDATE speeches SET title=?, speech_date=?, occasion=?, location=?, themes=?, keywords=?, text=?, tagged_by=? WHERE id=?`).run(
     title, date, occasion, location, themes, keywords, text, taggedBy, s.id
   );
-  audit({ ...actor(req), action: 'speech.updated', target: title });
+  await audit({ ...actor(req), action: 'speech.updated', target: title });
   res.json({ ok: true });
 });
 
-bancoRouter.post('/speeches/:id/reprocess', (req, res) => {
-  const s = db.prepare(`SELECT * FROM speeches WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
+bancoRouter.post('/speeches/:id/reprocess', async (req, res) => {
+  const s = await db.prepare(`SELECT * FROM speeches WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
   if (!s) throw new HttpError(404, 'Discurso não encontrado.');
   if (!['error', 'needs_ai', 'done'].includes(s.status)) throw bad('O discurso ainda está em processamento.');
   if (!s.file_kept && !s.text) throw bad('O arquivo original não está mais disponível.');
   // Reprocessing re-runs the automatic tagging, replacing manual tags.
-  db.prepare(`UPDATE speeches SET status='queued', status_detail='', tagged_by='' WHERE id=?`).run(s.id);
-  audit({ ...actor(req), action: 'speech.reprocessed', target: s.title });
+  await db.prepare(`UPDATE speeches SET status='queued', status_detail='', tagged_by='' WHERE id=?`).run(s.id);
+  await audit({ ...actor(req), action: 'speech.reprocessed', target: s.title });
   enqueue(s.id);
   res.json({ ok: true });
 });
 
-bancoRouter.get('/speeches/:id/file', (req, res) => {
-  const s = db.prepare(`SELECT * FROM speeches WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
+bancoRouter.get('/speeches/:id/file', async (req, res) => {
+  const s = await db.prepare(`SELECT * FROM speeches WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
   if (!s || !s.file_kept) throw new HttpError(404, 'Arquivo original não disponível.');
   const p = speechPath(s);
   if (!fs.existsSync(p)) throw new HttpError(404, 'Arquivo original não disponível.');
@@ -983,14 +986,14 @@ bancoRouter.get('/speeches/:id/file', (req, res) => {
   fs.createReadStream(p).pipe(res);
 });
 
-bancoRouter.delete('/speeches/:id', (req, res) => {
+bancoRouter.delete('/speeches/:id', async (req, res) => {
   requireManager(req);
-  const s = db.prepare(`SELECT * FROM speeches WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
+  const s = await db.prepare(`SELECT * FROM speeches WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
   if (!s) throw new HttpError(404, 'Discurso não encontrado.');
   if (s.status === 'processing') throw bad('Aguarde o fim do processamento para excluir.');
   if (s.file_name) fs.rmSync(speechPath(s), { force: true });
-  db.prepare(`DELETE FROM speeches WHERE id = ?`).run(s.id);
-  audit({ ...actor(req), action: 'speech.deleted', target: s.title });
+  await db.prepare(`DELETE FROM speeches WHERE id = ?`).run(s.id);
+  await audit({ ...actor(req), action: 'speech.deleted', target: s.title });
   res.json({ ok: true });
 });
 
@@ -1015,7 +1018,7 @@ async function drain() {
         await processSpeech(id);
       } catch (e) {
         console.error('[discursos] falha', id, e);
-        db.prepare(`UPDATE speeches SET status='error', status_detail=? WHERE id=?`).run(String((e as Error).message ?? e).slice(0, 500), id);
+        await db.prepare(`UPDATE speeches SET status='error', status_detail=? WHERE id=?`).run(String((e as Error).message ?? e).slice(0, 500), id);
       }
     }
   } finally {
@@ -1023,11 +1026,11 @@ async function drain() {
   }
 }
 
-const setStatus = (id: string, status: string, detail = '') =>
-  db.prepare(`UPDATE speeches SET status=?, status_detail=? WHERE id=?`).run(status, detail, id);
+const setStatus = async (id: string, status: string, detail = '') =>
+  await db.prepare(`UPDATE speeches SET status=?, status_detail=? WHERE id=?`).run(status, detail, id);
 
 async function processSpeech(id: string) {
-  const s = db.prepare(`SELECT * FROM speeches WHERE id = ?`).get(id) as any;
+  const s = await db.prepare(`SELECT * FROM speeches WHERE id = ?`).get(id) as any;
   if (!s) return;
   const kind = s.media_type as 'audio' | 'video' | 'pdf' | 'docx' | 'text';
   const file = speechPath(s);
@@ -1041,32 +1044,32 @@ async function processSpeech(id: string) {
       if (text.includes('�')) text = buf.toString('latin1');
       text = text.replace(/^﻿/, '').trim();
     } else if (kind === 'docx') {
-      setStatus(id, 'processing', 'Extraindo texto do documento…');
+      await setStatus(id, 'processing', 'Extraindo texto do documento…');
       text = (await mammoth.extractRawText({ path: file })).value.trim();
     } else if (!text) {
       if (!aiAvailable()) {
-        setStatus(id, 'needs_ai', kind === 'pdf' ? 'OCR do PDF requer a chave da IA (GEMINI_API_KEY).' : 'A decupagem requer a chave da IA (GEMINI_API_KEY).');
+        await setStatus(id, 'needs_ai', kind === 'pdf' ? 'OCR do PDF requer a chave da IA (GEMINI_API_KEY).' : 'A decupagem requer a chave da IA (GEMINI_API_KEY).');
         return;
       }
-      setStatus(id, 'processing', kind === 'pdf' ? 'Extraindo texto do PDF (OCR)…' : 'Decupando o áudio com IA…');
+      await setStatus(id, 'processing', kind === 'pdf' ? 'Extraindo texto do PDF (OCR)…' : 'Decupando o áudio com IA…');
       text = await extractTextWithAI(file, s.mime_type, kind as 'audio' | 'video' | 'pdf');
     }
     if (!text) throw new Error('Nenhum texto encontrado no arquivo.');
-    db.prepare(`UPDATE speeches SET text=? WHERE id=?`).run(text, id);
+    await db.prepare(`UPDATE speeches SET text=? WHERE id=?`).run(text, id);
   }
 
   // Videos are discarded once the transcript is safely stored.
   if (kind === 'video' && s.file_kept) {
     fs.rmSync(file, { force: true });
-    db.prepare(`UPDATE speeches SET file_kept=0, stored_bytes=0 WHERE id=?`).run(id);
+    await db.prepare(`UPDATE speeches SET file_kept=0, stored_bytes=0 WHERE id=?`).run(id);
   }
 
   // 2) classify (AI, or keyword fallback); keep manual tags untouched
   if (s.tagged_by === 'manual') {
-    db.prepare(`UPDATE speeches SET status='done', status_detail='', processed_at=datetime('now') WHERE id=?`).run(id);
+    await db.prepare(`UPDATE speeches SET status='done', status_detail='', processed_at=datetime('now') WHERE id=?`).run(id);
     return;
   }
-  setStatus(id, 'processing', 'Classificando temas…');
+  await setStatus(id, 'processing', 'Classificando temas…');
   let summary = '';
   let themes: string[] = [];
   let keywords: string[] = [];
@@ -1092,14 +1095,14 @@ async function processSpeech(id: string) {
     themes = keywordThemes(text);
     detail = 'Temas sugeridos por palavras-chave. Configure a IA para resumo e etiquetas automáticas.';
   }
-  db.prepare(
+  await db.prepare(
     `UPDATE speeches SET summary=?, themes=?, keywords=?, tagged_by=?, status='done', status_detail=?, processed_at=datetime('now') WHERE id=?`
   ).run(summary, JSON.stringify(themes), JSON.stringify(keywords), taggedBy, detail, id);
 }
 
 /** Resume jobs interrupted by a restart. */
-export function startSpeechWorker() {
-  const pending = db.prepare(`SELECT id FROM speeches WHERE status IN ('queued','processing')`).all() as { id: string }[];
-  db.prepare(`UPDATE speeches SET status='queued' WHERE status='processing'`).run();
+export async function startSpeechWorker() {
+  const pending = await db.prepare(`SELECT id FROM speeches WHERE status IN ('queued','processing')`).all() as { id: string }[];
+  await db.prepare(`UPDATE speeches SET status='queued' WHERE status='processing'`).run();
   pending.forEach((p) => enqueue(p.id));
 }
