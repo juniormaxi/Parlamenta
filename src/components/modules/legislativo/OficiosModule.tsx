@@ -21,7 +21,7 @@ import {
   Printer,
 } from 'lucide-react';
 import { OfficialLetterModel } from '../../../types';
-import { DemoNoticeBanner } from '../../common/DemoNoticeBanner';
+import { useDialog } from '../../common/Dialogs';
 
 interface OficiosModuleProps {
   letters: OfficialLetterModel[];
@@ -34,6 +34,7 @@ export const OficiosModule: React.FC<OficiosModuleProps> = ({
   onCreateLetter,
   onUpdateLetter,
 }) => {
+  const dialog = useDialog();
   const [selectedLetter, setSelectedLetter] = useState<OfficialLetterModel | null>(
     letters[0] || null
   );
@@ -89,7 +90,7 @@ export const OficiosModule: React.FC<OficiosModuleProps> = ({
   // AI Generator Simulator
   const handleGenerateAiLetter = () => {
     if (!aiForm.subject || !aiForm.recipientName) {
-      alert('Preencha o destinatário e o assunto da solicitação.');
+      dialog.alert({ title: 'Campos obrigatórios', message: 'Preencha o destinatário e o assunto da solicitação.', tone: 'warning' });
       return;
     }
 
@@ -197,10 +198,6 @@ Deputada Estadual — Assembleia Legislativa de Mato Grosso`;
 
   return (
     <div className="space-y-4">
-      <DemoNoticeBanner
-        moduleName="Gestão de Ofícios & Comunicação Institucional"
-        contextText="Redação oficial de ofícios a Secretarias de Estado, Ministérios e Prefeituras com assistência de IA para padronização protocolar e auditoria de tom institucional."
-      />
 
       {/* Header bar */}
       <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -376,7 +373,7 @@ Deputada Estadual — Assembleia Legislativa de Mato Grosso`;
                   <button
                     onClick={() => {
                       navigator.clipboard.writeText(selectedLetter.body);
-                      alert('Texto do ofício copiado para a área de transferência!');
+                      dialog.toast('Texto do ofício copiado para a área de transferência.');
                     }}
                     className="p-1.5 text-slate-500 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
                     title="Copiar texto"

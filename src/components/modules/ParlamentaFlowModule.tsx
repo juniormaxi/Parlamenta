@@ -18,7 +18,6 @@ import {
   Lock,
 } from 'lucide-react';
 import { Protocol, TeamMember, ProtocolStatus, PriorityType } from '../../types';
-import { DemoNoticeBanner } from '../common/DemoNoticeBanner';
 
 interface ParlamentaFlowModuleProps {
   protocols: Protocol[];
@@ -195,10 +194,6 @@ export const ParlamentaFlowModule: React.FC<ParlamentaFlowModuleProps> = ({
 
   return (
     <div className="space-y-4">
-      <DemoNoticeBanner
-        moduleName="Parlamenta Flow"
-        contextText="Workflow parlamentar com controle de filas, cronômetros de SLA, exigência de autorização para encerramento e auditoria de devolutivas."
-      />
 
       {/* Header & Tabs */}
       <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">

@@ -15,7 +15,6 @@ import {
   Check,
 } from 'lucide-react';
 import { CalendarEvent, FlowTask, PriorityType } from '../../types';
-import { DemoNoticeBanner } from '../common/DemoNoticeBanner';
 
 interface AgendaTarefasModuleProps {
   events: CalendarEvent[];
@@ -81,10 +80,6 @@ export const AgendaTarefasModule: React.FC<AgendaTarefasModuleProps> = ({
 
   return (
     <div className="space-y-4">
-      <DemoNoticeBanner
-        moduleName="Agenda & Gestão de Tarefas"
-        contextText="Compromissos oficiais da Deputada e tarefas da equipe vinculadas a protocolos de atendimento."
-      />
 
       {/* Header & Controls */}
       <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">

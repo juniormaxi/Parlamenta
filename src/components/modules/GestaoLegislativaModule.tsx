@@ -9,9 +9,10 @@ import {
   Plus,
   ExternalLink,
 } from 'lucide-react';
-import { DemoNoticeBanner } from '../common/DemoNoticeBanner';
+import { useDialog } from '../common/Dialogs';
 
 export const GestaoLegislativaModule: React.FC = () => {
+  const dialog = useDialog();
   const [propositions] = useState([
     {
       id: 'pl-1',
@@ -47,10 +48,6 @@ export const GestaoLegislativaModule: React.FC = () => {
 
   return (
     <div className="space-y-4">
-      <DemoNoticeBanner
-        moduleName="Gestão Legislativa & Pauta Parlamentar"
-        contextText="Acompanhamento da tramitação regimental de Projetos de Lei, Comissões e Votações na Assembleia Legislativa de Mato Grosso."
-      />
 
       <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
@@ -64,7 +61,7 @@ export const GestaoLegislativaModule: React.FC = () => {
         </div>
 
         <button
-          onClick={() => alert('Formulário de cadastro de nova proposição regimental.')}
+          onClick={() => dialog.alert({ title: 'Nova proposição', message: 'Formulário de cadastro de nova proposição regimental.' })}
           className="px-3.5 py-1.5 text-xs font-semibold text-white bg-[#102C45] hover:bg-[#176B80] rounded-lg transition-colors flex items-center gap-1.5 shadow-xs"
         >
           <Plus className="w-3.5 h-3.5" />
@@ -103,7 +100,7 @@ export const GestaoLegislativaModule: React.FC = () => {
 
               <div className="flex items-center gap-2 shrink-0">
                 <button
-                  onClick={() => alert(`Consulta à tramitação do ${item.code} no portal da ALMT.`)}
+                  onClick={() => dialog.alert({ title: 'Consulta de tramitação', message: `Consulta à tramitação do ${item.code} no portal da ALMT.` })}
                   className="px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors flex items-center gap-1.5"
                 >
                   <span>Ver Tramitação</span>

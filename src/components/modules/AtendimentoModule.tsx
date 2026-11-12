@@ -19,7 +19,7 @@ import {
   AlertCircle,
 } from 'lucide-react';
 import { Conversation, ChannelType, Protocol, PriorityType } from '../../types';
-import { DemoNoticeBanner } from '../common/DemoNoticeBanner';
+import { useDialog } from '../common/Dialogs';
 
 interface AtendimentoModuleProps {
   conversations: Conversation[];
@@ -44,6 +44,7 @@ export const AtendimentoModule: React.FC<AtendimentoModuleProps> = ({
   onCreateProtocolFromConversation,
   onSendMessage,
 }) => {
+  const dialog = useDialog();
   const [activeChannelFilter, setActiveChannelFilter] = useState<string>('todos');
   const [searchFilter, setSearchFilter] = useState<string>('');
   const [selectedConvId, setSelectedConvId] = useState<string>(
@@ -129,10 +130,6 @@ export const AtendimentoModule: React.FC<AtendimentoModuleProps> = ({
 
   return (
     <div className="space-y-4">
-      <DemoNoticeBanner
-        moduleName="Central de Atendimento Unificada"
-        contextText="Modo Sandbox: Simulando mensagens recebidas e respostas do gabinete. Sem conexão externa de API em tempo real."
-      />
 
       {/* Main Inbox Container */}
       <div className="bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden flex flex-col md:flex-row h-[720px]">
@@ -601,7 +598,7 @@ export const AtendimentoModule: React.FC<AtendimentoModuleProps> = ({
               </button>
               <button
                 onClick={() => {
-                  alert('Atendimento manual registrado com sucesso no histórico do gabinete.');
+                  dialog.toast('Atendimento manual registrado com sucesso no histórico do gabinete.');
                   setNewManualContactOpen(false);
                 }}
                 className="px-4 py-1.5 text-xs font-semibold text-white bg-[#102C45] rounded-lg"

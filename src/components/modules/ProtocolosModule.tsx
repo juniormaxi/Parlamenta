@@ -28,7 +28,6 @@ import {
   ChannelType,
   TeamMember,
 } from '../../types';
-import { DemoNoticeBanner } from '../common/DemoNoticeBanner';
 
 interface ProtocolosModuleProps {
   protocols: Protocol[];
@@ -158,10 +157,6 @@ export const ProtocolosModule: React.FC<ProtocolosModuleProps> = ({
 
   return (
     <div className="space-y-4">
-      <DemoNoticeBanner
-        moduleName="Gestão de Protocolos & Demandas"
-        contextText="Base demonstrativa de Mato Grosso com histórico de movimentações, vinculação de tarefas e devolutiva auditável ao cidadão."
-      />
 
       {/* Top Controls & Filters */}
       <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs space-y-3">

@@ -29,6 +29,8 @@ interface TopbarProps {
   onSearchChange: (q: string) => void;
   moduleTitle: string;
   onLogout?: () => void;
+  /** Authenticated user from the API. When present, the RBAC role simulator is disabled. */
+  sessionUser?: { name: string; email: string };
 }
 
 export const Topbar: React.FC<TopbarProps> = ({
@@ -45,13 +47,23 @@ export const Topbar: React.FC<TopbarProps> = ({
   onSearchChange,
   moduleTitle,
   onLogout,
+  sessionUser,
 }) => {
   const [cabinetMenuOpen, setCabinetMenuOpen] = useState(false);
   const [roleMenuOpen, setRoleMenuOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
 
-  const currentUser =
-    teamMembers.find((m) => m.role === currentRole) || teamMembers[0];
+  const currentUser = sessionUser
+    ? {
+        name: sessionUser.name,
+        avatar: sessionUser.name
+          .split(/\s+/)
+          .filter(Boolean)
+          .slice(0, 2)
+          .map((w) => w[0]!.toUpperCase())
+          .join(''),
+      }
+    : teamMembers.find((m) => m.role === currentRole) || teamMembers[0];
 
   const roleLabels: Record<UserRole, string> = {
     deputado: 'Deputada Titular',
@@ -232,6 +244,17 @@ export const Topbar: React.FC<TopbarProps> = ({
 
           {roleMenuOpen && (
             <div className="absolute right-0 top-full mt-2 w-64 bg-white border border-slate-200 rounded-xl shadow-lg p-2 z-40 animate-in fade-in zoom-in-95 duration-100">
+              {sessionUser ? (
+                <div className="px-2 py-1.5 text-xs">
+                  <p className="font-semibold text-slate-900 truncate">{sessionUser.name}</p>
+                  <p className="text-[10px] text-slate-500 truncate">{sessionUser.email}</p>
+                  <p className="text-[10px] text-[#176B80] font-medium mt-0.5 flex items-center gap-1">
+                    <Shield className="w-3 h-3" />
+                    {roleLabels[currentRole]} · perfil definido pelo servidor
+                  </p>
+                </div>
+              ) : (
+              <>
               <div className="px-2 py-1.5 text-[10px] font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
                 <UserCheck className="w-3 h-3 text-[#176B80]" />
                 Simular Papel / Perfil RBAC
@@ -272,6 +295,9 @@ export const Topbar: React.FC<TopbarProps> = ({
                 </span>
                 Permite testar visualização de Coordenador vs. Assessor.
               </div>
+
+              </>
+              )}
 
               {onLogout && (
                 <div className="mt-2 pt-2 border-t border-slate-100">

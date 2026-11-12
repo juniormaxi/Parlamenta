@@ -10,10 +10,11 @@ import {
   Printer,
   FileText,
 } from 'lucide-react';
-import { DemoNoticeBanner } from '../common/DemoNoticeBanner';
 import { KpiCard } from '../common/KpiCard';
+import { useDialog } from '../common/Dialogs';
 
 export const RelatoriosModule: React.FC = () => {
+  const dialog = useDialog();
   const reports = [
     {
       id: 'rep-1',
@@ -51,10 +52,6 @@ export const RelatoriosModule: React.FC = () => {
 
   return (
     <div className="space-y-4">
-      <DemoNoticeBanner
-        moduleName="Relatórios & Métricas de Desempenho"
-        contextText="Geração de relatórios executivos para prestação de contas aos cidadãos, órgãos de controle e transparência do mandato."
-      />
 
       <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
@@ -68,7 +65,7 @@ export const RelatoriosModule: React.FC = () => {
         </div>
 
         <button
-          onClick={() => alert('Download do Dossiê Completo de Produtividade do Gabinete.')}
+          onClick={() => dialog.toast('Download do Dossiê Completo de Produtividade do Gabinete iniciado.', 'info')}
           className="px-3.5 py-1.5 text-xs font-semibold text-white bg-[#102C45] hover:bg-[#176B80] rounded-lg transition-colors flex items-center gap-1.5 shadow-xs"
         >
           <Download className="w-3.5 h-3.5 text-[#36B7A5]" />
@@ -128,7 +125,7 @@ export const RelatoriosModule: React.FC = () => {
 
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => alert(`Iniciando download do relatório: ${r.title}`)}
+                  onClick={() => dialog.toast(`Iniciando download do relatório: ${r.title}`, 'info')}
                   className="px-3.5 py-1.5 text-xs font-semibold text-[#102C45] bg-[#E9F1F4] hover:bg-[#d6e5eb] rounded-lg transition-colors flex items-center gap-1.5"
                 >
                   <Download className="w-3.5 h-3.5 text-[#176B80]" />

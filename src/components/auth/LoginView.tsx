@@ -16,10 +16,11 @@ import {
   Fingerprint,
   Info,
 } from 'lucide-react';
-import { UserRole } from '../../types';
+import { api, ApiError } from '../../lib/api';
 
 interface LoginViewProps {
-  onLoginSuccess: (userRole: UserRole, userEmail: string) => void;
+  /** Called after the API accepted the credentials and set the session cookie. */
+  onLoginSuccess: () => void;
   cabinetName?: string;
 }
 
@@ -30,8 +31,8 @@ export const LoginView: React.FC<LoginViewProps> = ({
   cabinetName = 'Gabinete Dep. Mariana Ribeiro (ALMT)',
 }) => {
   const [authMode, setAuthMode] = useState<AuthMode>('login');
-  const [email, setEmail] = useState('leticia.prado@gabinete.mt.leg.br');
-  const [password, setPassword] = useState('••••••••••••');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -43,45 +44,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
 
-  // Demo user quick select accounts
-  const demoUsers: {
-    name: string;
-    role: UserRole;
-    email: string;
-    title: string;
-    avatar: string;
-  }[] = [
-    {
-      name: 'Letícia Prado',
-      role: 'coordenador_atendimento',
-      email: 'leticia.prado@gabinete.mt.leg.br',
-      title: 'Coord. de Atendimento & Triagem',
-      avatar: 'LP',
-    },
-    {
-      name: 'Lucas Mendes',
-      role: 'assessor_parlamentar',
-      email: 'lucas.mendes@gabinete.mt.leg.br',
-      title: 'Assessor Temático (Saúde/Infra)',
-      avatar: 'LM',
-    },
-    {
-      name: 'Dr. Roberto Valente',
-      role: 'chefe_gabinete',
-      email: 'roberto.valente@gabinete.mt.leg.br',
-      title: 'Chefe de Gabinete',
-      avatar: 'RV',
-    },
-    {
-      name: 'Dep. Mariana Ribeiro',
-      role: 'deputado',
-      email: 'mariana.ribeiro@al.mt.leg.br',
-      title: 'Parlamentar Titular',
-      avatar: 'MR',
-    },
-  ];
-
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email.trim() || !password.trim()) {
       setErrorMsg('Por favor, preencha o e-mail institucional e a senha.');
@@ -91,22 +54,15 @@ export const LoginView: React.FC<LoginViewProps> = ({
     setLoading(true);
     setErrorMsg('');
 
-    setTimeout(() => {
+    try {
+      await api('/auth/login', { method: 'POST', body: { email: email.trim(), password } });
+      setPassword('');
+      onLoginSuccess();
+    } catch (err) {
+      setErrorMsg(err instanceof ApiError ? err.message : 'Não foi possível conectar à API.');
+    } finally {
       setLoading(false);
-      // Determine role from email or default to coordinator
-      const matchedUser = demoUsers.find((u) => u.email.toLowerCase() === email.toLowerCase());
-      onLoginSuccess(matchedUser?.role || 'coordenador_atendimento', email);
-    }, 600);
-  };
-
-  const handleQuickLogin = (demoUser: typeof demoUsers[0]) => {
-    setEmail(demoUser.email);
-    setPassword('••••••••••••');
-    setLoading(true);
-    setTimeout(() => {
-      setLoading(false);
-      onLoginSuccess(demoUser.role, demoUser.email);
-    }, 400);
+    }
   };
 
   // Password Recovery Handlers
@@ -378,34 +334,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 </button>
               </form>
 
-              {/* Quick Demo Access Bar */}
-              <div className="pt-4 border-t border-slate-100 space-y-2">
-                <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 block">
-                  Ou selecione um perfil demonstrativo para testar:
-                </span>
-                <div className="grid grid-cols-2 gap-2">
-                  {demoUsers.map((u) => (
-                    <button
-                      key={u.role}
-                      type="button"
-                      onClick={() => handleQuickLogin(u)}
-                      className="p-2 rounded-lg border border-slate-200 hover:border-[#176B80] bg-slate-50/70 hover:bg-[#E9F1F4]/40 text-left transition-all flex items-center gap-2 group"
-                    >
-                      <div className="w-7 h-7 rounded-md bg-[#102C45] text-white flex items-center justify-center font-bold text-[11px] shrink-0 font-mono">
-                        {u.avatar}
-                      </div>
-                      <div className="truncate">
-                        <p className="text-xs font-bold text-slate-900 truncate leading-tight group-hover:text-[#176B80]">
-                          {u.name}
-                        </p>
-                        <p className="text-[10px] text-slate-500 truncate">
-                          {u.title.split(' ')[0]} {u.title.split(' ')[1]}
-                        </p>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
             </div>
           )}
 

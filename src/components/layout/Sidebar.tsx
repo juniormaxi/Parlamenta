@@ -23,6 +23,10 @@ import {
   Scale,
   Landmark,
   Send,
+  BookUser,
+  FolderTree,
+  Mic,
+  Rss,
 } from 'lucide-react';
 import { ModuleType, Cabinet } from '../../types';
 
@@ -48,7 +52,7 @@ interface NavItem {
   icon: React.ComponentType<{ className?: string }>;
   badge?: number;
   badgeVariant?: 'alert' | 'neutral';
-  group?: 'principal' | 'legislativo' | 'comunicacao' | 'estrategico' | 'sistema';
+  group?: 'principal' | 'legislativo' | 'comunicacao' | 'estrategico' | 'dados' | 'sistema';
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -97,11 +101,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
     { id: 'newsletter', label: 'Newsletter', icon: Mail, group: 'comunicacao' },
     { id: 'imprensa', label: 'Conhecimento & Imprensa', icon: Newspaper, group: 'comunicacao' },
+    { id: 'clipping', label: 'Clipping', icon: Rss, group: 'comunicacao' },
     { id: 'site', label: 'Site & Publicações', icon: Globe, group: 'comunicacao' },
+    { id: 'bd_discursos', label: 'Discursos', icon: Mic, group: 'comunicacao' },
 
     { id: 'territorial', label: 'Inteligência Territorial', icon: MapPin, group: 'estrategico' },
     { id: 'documentos', label: 'Documentos do Gabinete', icon: FileText, group: 'estrategico' },
 
+    { id: 'bd_contatos', label: 'Contatos', icon: BookUser, group: 'dados' },
+    { id: 'bd_categorias', label: 'Categorias', icon: FolderTree, group: 'dados' },
+    { id: 'bd_importar', label: 'Importar Bancos de Dados', icon: FileSpreadsheet, group: 'dados' },
     { id: 'relatorios', label: 'Relatórios & Métricas', icon: BarChart3, group: 'sistema' },
     { id: 'integracoes', label: 'Canais & Integrações', icon: Sliders, group: 'sistema' },
     { id: 'admin', label: 'Administração & LGPD', icon: Shield, group: 'sistema' },
@@ -299,6 +308,37 @@ export const Sidebar: React.FC<SidebarProps> = ({
         )}
         {navItems
           .filter((i) => i.group === 'estrategico')
+          .map((item) => {
+            const Icon = item.icon;
+            const isActive = currentModule === item.id;
+            return (
+              <button
+                key={item.id}
+                onClick={() => onSelectModule(item.id)}
+                className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-medium transition-colors text-left group ${
+                  isActive
+                    ? 'bg-[#176B80] text-white shadow-xs'
+                    : 'text-slate-200 hover:bg-white/10 hover:text-white'
+                }`}
+                title={collapsed ? item.label : undefined}
+              >
+                <Icon
+                  className={`w-4 h-4 shrink-0 ${
+                    isActive ? 'text-[#36B7A5]' : 'text-slate-300 group-hover:text-white'
+                  }`}
+                />
+                {!collapsed && <span className="truncate flex-1">{item.label}</span>}
+              </button>
+            );
+          })}
+
+        {!collapsed && (
+          <div className="px-2 pt-4 pb-1 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
+            Banco de Dados
+          </div>
+        )}
+        {navItems
+          .filter((i) => i.group === 'dados')
           .map((item) => {
             const Icon = item.icon;
             const isActive = currentModule === item.id;

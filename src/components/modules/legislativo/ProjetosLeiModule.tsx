@@ -23,7 +23,7 @@ import {
   Check,
 } from 'lucide-react';
 import { LegislativeBill } from '../../../types';
-import { DemoNoticeBanner } from '../../common/DemoNoticeBanner';
+import { useDialog } from '../../common/Dialogs';
 
 interface ProjetosLeiModuleProps {
   bills: LegislativeBill[];
@@ -36,6 +36,7 @@ export const ProjetosLeiModule: React.FC<ProjetosLeiModuleProps> = ({
   onCreateBill,
   onUpdateBill,
 }) => {
+  const dialog = useDialog();
   const [selectedBill, setSelectedBill] = useState<LegislativeBill | null>(bills[0] || null);
   const [searchFilter, setSearchFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('todos');
@@ -85,7 +86,7 @@ export const ProjetosLeiModule: React.FC<ProjetosLeiModuleProps> = ({
   // AI Bill Generation Simulator
   const handleGenerateAiBill = () => {
     if (!aiForm.objective) {
-      alert('Por favor, informe o objetivo principal da proposição.');
+      dialog.alert({ title: 'Campo obrigatório', message: 'Informe o objetivo principal da proposição.', tone: 'warning' });
       return;
     }
 
@@ -235,10 +236,6 @@ Art. 3º Esta Lei entra em vigor 90 (noventa) dias após sua publicação.`;
 
   return (
     <div className="space-y-4">
-      <DemoNoticeBanner
-        moduleName="Gestão de Projetos de Lei & Inteligência Legislativa"
-        contextText="Elaboração de Projetos de Lei com IA generativa, auditoria constitucional de competência e conformidade com a Lei Complementar Federal nº 95/1998."
-      />
 
       {/* Header bar */}
       <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -409,7 +406,7 @@ Art. 3º Esta Lei entra em vigor 90 (noventa) dias após sua publicação.`;
                   <button
                     onClick={() => {
                       navigator.clipboard.writeText(`${selectedBill.code}\n\nEMENTA: ${selectedBill.ementa}\n\n${selectedBill.fullText}\n\nJUSTIFICATIVA:\n${selectedBill.justificativa}`);
-                      alert('Texto completo copiado para a área de transferência!');
+                      dialog.toast('Texto completo copiado para a área de transferência.');
                     }}
                     className="p-1.5 text-slate-500 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
                     title="Copiar texto completo"

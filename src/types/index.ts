@@ -10,13 +10,18 @@ export type ModuleType =
   | 'newsletter'
   | 'imprensa'
   | 'site'
+  | 'clipping'
   | 'legislativo'
   | 'legislativo_projetos'
   | 'legislativo_oficios'
   | 'legislativo_parlamento'
   | 'integracoes'
   | 'relatorios'
-  | 'admin';
+  | 'admin'
+  | 'bd_contatos'
+  | 'bd_categorias'
+  | 'bd_discursos'
+  | 'bd_importar';
 
 export type UserRole =
   | 'deputado'
@@ -44,7 +49,7 @@ export interface Cabinet {
   id: string;
   name: string;
   parliamentarian: string;
-  sphere: 'estadual' | 'federal';
+  sphere: 'estadual' | 'federal' | 'municipal';
   house: string; // Ex: ALMT, Câmara dos Deputados
   state: string; // MT, DF, etc.
   party: string;
@@ -200,7 +205,8 @@ export interface DocumentModel {
   id: string;
   code: string;
   title: string;
-  category: 'Ofício' | 'Requerimento' | 'Projeto de Lei' | 'Emenda Parlamentar' | 'Indicação';
+  /** Name of a proposition type registered in Banco de Dados › Categorias › Tipos de Proposição. */
+  category: string;
   recipient: string;
   author: string;
   createdAt: string;

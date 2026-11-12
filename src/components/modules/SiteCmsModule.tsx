@@ -12,7 +12,7 @@ import {
   Webhook,
 } from 'lucide-react';
 import { CMSPost } from '../../types';
-import { DemoNoticeBanner } from '../common/DemoNoticeBanner';
+import { useDialog } from '../common/Dialogs';
 
 interface SiteCmsModuleProps {
   posts: CMSPost[];
@@ -23,6 +23,7 @@ export const SiteCmsModule: React.FC<SiteCmsModuleProps> = ({
   posts,
   onToggleFeatured,
 }) => {
+  const dialog = useDialog();
   const [activeTab, setActiveTab] = useState<'posts' | 'webhooks'>('posts');
   const [webhookUrl, setWebhookUrl] = useState('https://marianaribeiro.com.br/api/sync-gabinete');
   const [webhookSaved, setWebhookSaved] = useState(false);
@@ -35,10 +36,6 @@ export const SiteCmsModule: React.FC<SiteCmsModuleProps> = ({
 
   return (
     <div className="space-y-4">
-      <DemoNoticeBanner
-        moduleName="Site Oficial & CMS do Mandato"
-        contextText="Gestão de notícias, prestação de contas de emendas e sincronização externa via Webhooks para o portal oficial do parlamentar."
-      />
 
       <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
@@ -128,7 +125,7 @@ export const SiteCmsModule: React.FC<SiteCmsModuleProps> = ({
                   </button>
                   <button
                     onClick={() =>
-                      alert('Pré-visualização da publicação no layout público do portal.')
+                      dialog.alert({ title: 'Pré-visualização', message: 'Pré-visualização da publicação no layout público do portal.' })
                     }
                     className="p-1.5 text-slate-500 hover:text-slate-900 rounded-lg hover:bg-slate-100"
                     title="Prévia pública"

@@ -12,7 +12,6 @@ import {
   Check,
 } from 'lucide-react';
 import { TeamMember, Protocol } from '../../types';
-import { DemoNoticeBanner } from '../common/DemoNoticeBanner';
 import { KpiCard } from '../common/KpiCard';
 
 interface EquipeModuleProps {
@@ -45,10 +44,6 @@ export const EquipeModule: React.FC<EquipeModuleProps> = ({
 
   return (
     <div className="space-y-4">
-      <DemoNoticeBanner
-        moduleName="Gestão da Equipe & Produtividade"
-        contextText="Monitoramento de carga operacional, processos em atraso por assessor e redistribuição assistida de demandas."
-      />
 
       {/* Header & Quick Action */}
       <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">

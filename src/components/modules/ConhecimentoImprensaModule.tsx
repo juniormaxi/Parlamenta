@@ -7,14 +7,13 @@ import {
   Send,
   CheckCircle2,
   Share2,
-  ExternalLink,
   BookOpen,
   Check,
   X,
   FileCheck,
 } from 'lucide-react';
 import { PressRelease } from '../../types';
-import { DemoNoticeBanner } from '../common/DemoNoticeBanner';
+import { useDialog } from '../common/Dialogs';
 
 interface ConhecimentoImprensaModuleProps {
   releases: PressRelease[];
@@ -27,8 +26,8 @@ export const ConhecimentoImprensaModule: React.FC<ConhecimentoImprensaModuleProp
   onUpdateRelease,
   onCreateRelease,
 }) => {
+  const dialog = useDialog();
   const [selectedRelease, setSelectedRelease] = useState<PressRelease>(releases[0]);
-  const [activeTab, setActiveTab] = useState<'releases' | 'clipping'>('releases');
   const [aiEnhancing, setAiEnhancing] = useState(false);
   const [aiNote, setAiNote] = useState('');
   const [newReleaseModalOpen, setNewReleaseModalOpen] = useState(false);
@@ -79,46 +78,16 @@ export const ConhecimentoImprensaModule: React.FC<ConhecimentoImprensaModuleProp
     setSelectedRelease(updated);
   };
 
-  const clippingNews = [
-    {
-      id: 'cl-1',
-      title: 'ALMT aprova orçamento de Mato Grosso para 2027 com foco em saúde e rodovias',
-      source: 'Diário Oficial de MT / Agência AL',
-      date: 'Hoje às 10:30',
-      category: 'Legislativo',
-      summary: 'Deputados estaduais aprovaram em primeira votação o texto-base da LOA com inclusão de emendas impositivas.',
-    },
-    {
-      id: 'cl-2',
-      title: 'SES-MT anuncia plano emergencial para desafogar leitos pediátricos no interior',
-      source: 'G1 Mato Grosso',
-      date: 'Hoje às 08:45',
-      category: 'Saúde',
-      summary: 'Governo do Estado atende solicitações de parlamentares e abrirá vagas em consórcios municipais.',
-    },
-    {
-      id: 'cl-3',
-      title: 'Produtores cobram recuperação de trechos vicinais e estaduais no Médio-Norte',
-      source: 'Canal Rural Mato Grosso',
-      date: 'Ontem',
-      category: 'Agronegócio',
-      summary: 'Escoamento da safra requer intervenções na malha viária em Nova Mutum e Sorriso.',
-    },
-  ];
 
   return (
     <div className="space-y-4">
-      <DemoNoticeBanner
-        moduleName="Conhecimento & Assessoria de Imprensa"
-        contextText="Monitoramento de fontes oficiais, editor de releases com assistência de IA para tom institucional e aprovação editorial."
-      />
 
       {/* Header & Controls */}
       <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-lg font-bold text-slate-900 tracking-tight flex items-center gap-2">
             <Newspaper className="w-5 h-5 text-[#176B80]" />
-            Imprensa, Releases & Clipping do Mandato
+            Imprensa & Releases do Mandato
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
             Divulgação oficial das ações legislativas, fiscalizatórias e emendas nos municípios
@@ -126,29 +95,6 @@ export const ConhecimentoImprensaModule: React.FC<ConhecimentoImprensaModuleProp
         </div>
 
         <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg">
-            <button
-              onClick={() => setActiveTab('releases')}
-              className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors ${
-                activeTab === 'releases'
-                  ? 'bg-white text-slate-900 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Releases & Notas
-            </button>
-            <button
-              onClick={() => setActiveTab('clipping')}
-              className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors ${
-                activeTab === 'clipping'
-                  ? 'bg-white text-slate-900 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Clipping de Fontes
-            </button>
-          </div>
-
           <button
             onClick={() => setNewReleaseModalOpen(true)}
             className="px-3.5 py-1.5 text-xs font-semibold text-white bg-[#102C45] hover:bg-[#176B80] rounded-lg transition-colors flex items-center gap-1.5 shadow-xs"
@@ -159,7 +105,6 @@ export const ConhecimentoImprensaModule: React.FC<ConhecimentoImprensaModuleProp
         </div>
       </div>
 
-      {activeTab === 'releases' ? (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Release List (1 span) */}
           <div className="bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden flex flex-col">
@@ -297,52 +242,6 @@ export const ConhecimentoImprensaModule: React.FC<ConhecimentoImprensaModuleProp
             </div>
           )}
         </div>
-      ) : (
-        /* Clipping de Fontes */
-        <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs space-y-4">
-          <div className="border-b border-slate-100 pb-3 flex items-center justify-between">
-            <div>
-              <h3 className="font-bold text-slate-900 text-sm">
-                Clipping de Fontes Autorizadas de Mato Grosso
-              </h3>
-              <p className="text-xs text-slate-500">
-                Monitoramento de Diários Oficiais, Assembleia Legislativa e portais jornalísticos regionais
-              </p>
-            </div>
-            <span className="text-xs text-slate-400 font-mono">Atualizado a cada 30 min</span>
-          </div>
-
-          <div className="space-y-3">
-            {clippingNews.map((news) => (
-              <div
-                key={news.id}
-                className="p-4 rounded-xl border border-slate-200 bg-slate-50/50 hover:bg-white transition-colors space-y-1.5"
-              >
-                <div className="flex items-center justify-between text-[11px] font-mono text-slate-500">
-                  <span className="font-semibold text-[#176B80]">{news.source}</span>
-                  <span>{news.date}</span>
-                </div>
-                <h4 className="font-bold text-slate-900 text-xs">{news.title}</h4>
-                <p className="text-xs text-slate-600">{news.summary}</p>
-                <div className="pt-2 flex items-center justify-between text-xs">
-                  <span className="text-[10px] uppercase font-mono px-2 py-0.5 bg-slate-200 rounded text-slate-700">
-                    {news.category}
-                  </span>
-                  <button
-                    onClick={() =>
-                      alert('Abertura de matéria oficial na fonte autorizada')
-                    }
-                    className="text-xs text-[#176B80] hover:underline flex items-center gap-1 font-medium"
-                  >
-                    <span>Ver no Diário Oficial / Fonte</span>
-                    <ExternalLink className="w-3 h-3" />
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
       {/* Modal: Novo Release */}
       {newReleaseModalOpen && (

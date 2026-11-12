@@ -3,7 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
+import { api, type Session, type ApiTenant } from './lib/api';
+import { SuperAdminConsole } from './components/superadmin/SuperAdminConsole';
 import {
   ModuleType,
   UserRole,
@@ -66,6 +68,7 @@ import { DocumentosModule } from './components/modules/DocumentosModule';
 import { NewsletterModule } from './components/modules/NewsletterModule';
 import { ConhecimentoImprensaModule } from './components/modules/ConhecimentoImprensaModule';
 import { SiteCmsModule } from './components/modules/SiteCmsModule';
+import { ClippingModule } from './components/modules/ClippingModule';
 import { GestaoLegislativaModule } from './components/modules/GestaoLegislativaModule';
 import { ParlamentoHemicicloModule } from './components/modules/legislativo/ParlamentoHemicicloModule';
 import { ProjetosLeiModule } from './components/modules/legislativo/ProjetosLeiModule';
@@ -73,16 +76,89 @@ import { OficiosModule } from './components/modules/legislativo/OficiosModule';
 import { IntegracoesModule } from './components/modules/IntegracoesModule';
 import { RelatoriosModule } from './components/modules/RelatoriosModule';
 import { AdministracaoModule } from './components/modules/AdministracaoModule';
+import { ContatosModule } from './components/modules/banco/ContatosModule';
+import { CategoriasModule } from './components/modules/banco/CategoriasModule';
+import { DiscursosModule } from './components/modules/banco/DiscursosModule';
+import { ImportarModule } from './components/modules/banco/ImportarModule';
 
+function tenantToCabinet(t: ApiTenant): Cabinet {
+  return {
+    id: t.id,
+    name: t.name,
+    parliamentarian: t.parliamentarian,
+    sphere: t.sphere,
+    house: t.house,
+    state: t.state,
+    party: '',
+  };
+}
+
+/**
+ * Session gate. The server decides who the user is, their role and their tenant;
+ * the client never chooses a tenant. Each login mounts a fresh workspace so no
+ * in-memory state survives from a previous user.
+ */
 export default function App() {
-  // Authentication State (Session lock & login screen)
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(true);
+  const [session, setSession] = useState<Session | null>(null);
+  const [checked, setChecked] = useState(false);
+
+  const refresh = useCallback(async () => {
+    try {
+      setSession(await api<Session>('/auth/me'));
+    } catch {
+      setSession(null);
+    } finally {
+      setChecked(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const logout = useCallback(async () => {
+    await api('/auth/logout', { method: 'POST' }).catch(() => undefined);
+    setSession(null);
+  }, []);
+
+  if (!checked) {
+    return (
+      <div className="h-screen w-screen flex items-center justify-center bg-[#F8FAFC] text-xs text-slate-500">
+        Verificando sessão…
+      </div>
+    );
+  }
+
+  if (!session) return <LoginView onLoginSuccess={refresh} cabinetName="Parlamenta" />;
+
+  if (session.user.role === 'super_admin') {
+    return <SuperAdminConsole user={session.user} onLogout={logout} />;
+  }
+
+  return <CabinetWorkspace key={session.user.id} session={session} onLogout={logout} />;
+}
+
+function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: () => void }) {
+  const tenantCabinet = tenantToCabinet(session.tenant!);
 
   // Navigation & Cabinet State
   const [currentModule, setCurrentModule] = useState<ModuleType>('dashboard');
-  const [activeCabinet, setActiveCabinet] = useState<Cabinet>(mockCabinets[0]);
-  const [currentRole, setCurrentRole] = useState<UserRole>('coordenador_atendimento');
+  const [activeCabinet, setActiveCabinet] = useState<Cabinet>(tenantCabinet);
+  const [currentRole, setCurrentRole] = useState<UserRole>(session.user.role as UserRole);
   const [customLogoUrl, setCustomLogoUrl] = useState<string>('');
+  // Filter pre-selected when jumping to the contacts list (from an import or a category/tag).
+  const [contactsFilter, setContactsFilter] = useState<{ tag?: string; category?: string }>({});
+  const [categoriasTab, setCategoriasTab] = useState<'categorias' | 'etiquetas' | 'tipos'>('categorias');
+  const openContacts = (filter: { tag?: string; category?: string }) => {
+    setContactsFilter(filter);
+    setCurrentModule('bd_contatos');
+  };
+  const openCategorias = (tab: 'categorias' | 'etiquetas' | 'tipos') => {
+    setCategoriasTab(tab);
+    setCurrentModule('bd_categorias');
+  };
+  // Server enforces these too; the flag only hides buttons the user cannot use.
+  const canManageDb = ['deputado', 'chefe_gabinete', 'coordenador_atendimento'].includes(session.user.role);
 
   // UI state
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -305,6 +381,10 @@ export default function App() {
     setDocuments((prev) => [doc, ...prev]);
   };
 
+  const handleUpdateDocument = (updated: DocumentModel) => {
+    setDocuments((prev) => prev.map((d) => (d.id === updated.id ? updated : d)));
+  };
+
   const handleUpdateRelease = (updated: PressRelease) => {
     setPressReleases((prev) =>
       prev.map((r) => (r.id === updated.id ? updated : r))
@@ -402,6 +482,11 @@ export default function App() {
     integracoes: 'Canais & Integrações',
     relatorios: 'Relatórios Executivos',
     admin: 'Administração & LGPD',
+    bd_contatos: 'Banco de Dados · Contatos',
+    bd_categorias: 'Banco de Dados · Categorias',
+    bd_discursos: 'Comunicação · Discursos',
+    clipping: 'Comunicação · Clipping',
+    bd_importar: 'Banco de Dados · Importação',
   };
 
   // Badges calculation
@@ -416,24 +501,14 @@ export default function App() {
     (p) => p.status === 'novo' || p.slaStatus === 'alerta_48h'
   ).length;
 
-  if (!isAuthenticated) {
-    return (
-      <LoginView
-        onLoginSuccess={(role, email) => {
-          setCurrentRole(role);
-          setIsAuthenticated(true);
-        }}
-        cabinetName={activeCabinet.name}
-      />
-    );
-  }
-
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-[#F8FAFC]">
       {/* Sidebar Navigation */}
       <Sidebar
         currentModule={currentModule}
         onSelectModule={(mod) => {
+          setContactsFilter({});
+          setCategoriasTab('categorias');
           setCurrentModule(mod);
           setMobileMenuOpen(false);
         }}
@@ -447,15 +522,16 @@ export default function App() {
           protocolosAtrasados: overdueProtocolsCount,
           flowAlertas: flowAlertsCount,
         }}
-        onLogout={() => setIsAuthenticated(false)}
+        onLogout={onLogout}
       />
 
       {/* Main Viewport Container */}
       <div className="flex-1 flex flex-col h-full overflow-hidden">
         {/* Topbar */}
         <Topbar
-          cabinets={mockCabinets}
+          cabinets={[tenantCabinet]}
           activeCabinet={activeCabinet}
+          sessionUser={{ name: session.user.name, email: session.user.email }}
           onSelectCabinet={setActiveCabinet}
           currentRole={currentRole}
           onChangeRole={setCurrentRole}
@@ -466,7 +542,7 @@ export default function App() {
           searchQuery={searchQuery}
           onSearchChange={setSearchFilter}
           moduleTitle={moduleTitles[currentModule]}
-          onLogout={() => setIsAuthenticated(false)}
+          onLogout={onLogout}
         />
 
         {/* Dynamic Content Viewport */}
@@ -542,6 +618,8 @@ export default function App() {
               customLogoUrl={customLogoUrl}
               onOpenLogoModal={() => setLogoModalOpen(true)}
               onCreateDocument={handleCreateDocument}
+              onUpdateDocument={handleUpdateDocument}
+              onManageTypes={() => openCategorias('tipos')}
             />
           )}
 
@@ -561,6 +639,8 @@ export default function App() {
               onCreateRelease={handleCreateRelease}
             />
           )}
+
+          {currentModule === 'clipping' && <ClippingModule />}
 
           {currentModule === 'site' && (
             <SiteCmsModule
@@ -598,6 +678,31 @@ export default function App() {
           {currentModule === 'integracoes' && <IntegracoesModule />}
 
           {currentModule === 'relatorios' && <RelatoriosModule />}
+
+          {currentModule === 'bd_contatos' && (
+            <ContatosModule
+              key={JSON.stringify(contactsFilter)}
+              canManage={canManageDb}
+              initialTag={contactsFilter.tag}
+              initialCategory={contactsFilter.category}
+              onOpenImport={() => setCurrentModule('bd_importar')}
+              onOpenCategories={openCategorias}
+            />
+          )}
+
+          {currentModule === 'bd_categorias' && (
+            <CategoriasModule key={categoriasTab} canManage={canManageDb} initialTab={categoriasTab} onOpenContacts={openContacts} />
+          )}
+
+          {currentModule === 'bd_discursos' && <DiscursosModule canManage={canManageDb} />}
+
+          {currentModule === 'bd_importar' && (
+            <ImportarModule
+              canCommit={canManageDb}
+              onOpenContacts={(tag) => openContacts({ tag })}
+              onOpenCategories={openCategorias}
+            />
+          )}
 
           {currentModule === 'admin' && (
             <AdministracaoModule

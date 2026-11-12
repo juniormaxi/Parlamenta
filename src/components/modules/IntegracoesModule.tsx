@@ -13,9 +13,10 @@ import {
   Camera,
   Database,
 } from 'lucide-react';
-import { DemoNoticeBanner } from '../common/DemoNoticeBanner';
+import { useDialog } from '../common/Dialogs';
 
 export const IntegracoesModule: React.FC = () => {
+  const dialog = useDialog();
   const integrations = [
     {
       id: 'whatsapp',
@@ -71,10 +72,6 @@ export const IntegracoesModule: React.FC = () => {
 
   return (
     <div className="space-y-4">
-      <DemoNoticeBanner
-        moduleName="Canais & Integrações Tecnológicas"
-        contextText="Painel de status dos conectores da plataforma. Todos os canais estão sinalizados em ambiente sandbox de protótipo."
-      />
 
       <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs">
         <h1 className="text-lg font-bold text-slate-900 tracking-tight flex items-center gap-2">
@@ -130,7 +127,7 @@ export const IntegracoesModule: React.FC = () => {
                 </span>
                 <button
                   onClick={() =>
-                    alert(`Configurações de credenciais para ${item.name} (Modo Sandbox ativo).`)
+                    dialog.alert({ title: `Credenciais · ${item.name}`, message: `Configurações de credenciais para ${item.name} (Modo Sandbox ativo).` })
                   }
                   className="text-xs text-[#176B80] hover:underline font-semibold"
                 >

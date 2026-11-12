@@ -36,7 +36,8 @@ import {
   VotingSession,
   VoteChoice,
 } from '../../../types';
-import { DemoNoticeBanner } from '../../common/DemoNoticeBanner';
+import { useDialog } from '../../common/Dialogs';
+import { HemicycleChart, type HemicycleGroup } from './HemicycleChart';
 
 interface ParlamentoHemicicloModuleProps {
   parliamentarians: Parliamentarian[];
@@ -48,6 +49,15 @@ interface ParlamentoHemicicloModuleProps {
 
 type ChamberViewMode = 'partidos' | 'blocos' | 'alinhamento' | 'votacao';
 
+// Categorical slots (validated: adjacent CVD ΔE ≥ 9, normal-vision ΔE ≥ 19); "Outros" is neutral gray.
+const PARTY_PALETTE = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948'];
+// Diverging pair (validated) + light steps + gray midpoint for polarity views.
+const GOOD = '#0b8bb0';
+const GOOD_LIGHT = '#7cc3d3';
+const BAD = '#d64545';
+const BAD_LIGHT = '#eb9a9a';
+const NEUTRAL_GRAY = '#a8a6a0';
+
 export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps> = ({
   parliamentarians,
   votingSessions,
@@ -55,6 +65,7 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
   onUpdateParliamentarian,
   onSaveVotingSession,
 }) => {
+  const dialog = useDialog();
   const [activeTab, setActiveTab] = useState<'composicao' | 'votacoes' | 'estrategia'>('composicao');
   const [selectedDeputy, setSelectedDeputy] = useState<Parliamentarian | null>(parliamentarians[0] || null);
   const [filterBloc, setFilterBloc] = useState<string>('todos');
@@ -113,72 +124,34 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
     });
   }, [parliamentarians, filterBloc, filterParty, searchDeputy]);
 
-  // Executive Layout coordinates for 24 seats in 3 concentric rows
-  // Center is (380, 310) in a 760 x 440 viewport
-  // Row 1 (inner tier): radius 125, 6 seats (span 150 deg, 195 to 345)
-  // Row 2 (middle tier): radius 190, 8 seats (span 160 deg, 190 to 350)
-  // Row 3 (outer tier): radius 255, 10 seats (span 168 deg, 186 to 354)
-  const seatCoordinates = useMemo(() => {
-    const coords: Record<number, { x: number; y: number; angle: number; row: number }> = {};
-    const centerX = 380;
-    const centerY = 310;
-
-    // Row 1 (inner): radius 125, 6 seats
-    const r1 = 125;
-    const n1 = 6;
-    for (let i = 0; i < n1; i++) {
-      const seatNum = i + 1;
-      const angleDeg = 195 + (i * (150 / (n1 - 1)));
-      const angleRad = (angleDeg * Math.PI) / 180;
-      coords[seatNum] = {
-        x: Math.round(centerX + r1 * Math.cos(angleRad)),
-        y: Math.round(centerY + r1 * Math.sin(angleRad)),
-        angle: angleDeg,
-        row: 1,
-      };
-    }
-
-    // Row 2 (middle): radius 190, 8 seats
-    const r2 = 190;
-    const n2 = 8;
-    for (let i = 0; i < n2; i++) {
-      const seatNum = 7 + i;
-      const angleDeg = 190 + (i * (160 / (n2 - 1)));
-      const angleRad = (angleDeg * Math.PI) / 180;
-      coords[seatNum] = {
-        x: Math.round(centerX + r2 * Math.cos(angleRad)),
-        y: Math.round(centerY + r2 * Math.sin(angleRad)),
-        angle: angleDeg,
-        row: 2,
-      };
-    }
-
-    // Row 3 (outer): radius 255, 10 seats
-    const r3 = 255;
-    const n3 = 10;
-    for (let i = 0; i < n3; i++) {
-      const seatNum = 15 + i;
-      const angleDeg = 186 + (i * (168 / (n3 - 1)));
-      const angleRad = (angleDeg * Math.PI) / 180;
-      coords[seatNum] = {
-        x: Math.round(centerX + r3 * Math.cos(angleRad)),
-        y: Math.round(centerY + r3 * Math.sin(angleRad)),
-        angle: angleDeg,
-        row: 3,
-      };
-    }
-
-    return coords;
-  }, []);
-
-  // Map deputy to their seat
-  const seatToDeputyMap = useMemo(() => {
-    const map = new Map<number, Parliamentarian>();
-    parliamentarians.forEach((dep) => {
-      map.set(dep.seatNumber, dep);
+  // Party order + display colors, shared by the diagram, the profile card and the cohesion ranking.
+  // Max 8 distinguishable hues: with more than 8 parties the 7 largest get their own color, the rest fold into "Outros".
+  const partyLayout = useMemo(() => {
+    const bySeat = (a: Parliamentarian, b: Parliamentarian) => a.seatNumber - b.seatNumber;
+    const BLOC_ORDER: Record<string, number> = { Governo: 0, Independente: 1, Oposição: 2 };
+    const map = new Map<string, Parliamentarian[]>();
+    parliamentarians.forEach((p) => map.set(p.party, [...(map.get(p.party) ?? []), p]));
+    const parties = [...map].map(([party, members]) => {
+      const counts: Record<string, number> = {};
+      members.forEach((m) => (counts[m.bloc] = (counts[m.bloc] ?? 0) + 1));
+      const bloc = Object.keys(counts).sort((a, b) => counts[b]! - counts[a]! || BLOC_ORDER[a]! - BLOC_ORDER[b]!)[0]!;
+      return { party, members: members.sort(bySeat), bloc };
     });
-    return map;
+    // Max 8 distinguishable hues: the 7 largest parties get their own color, the rest fold into "Outros".
+    const bySize = [...parties].sort((a, b) => b.members.length - a.members.length || a.party.localeCompare(b.party));
+    const own = new Set(bySize.slice(0, parties.length > 8 ? 7 : 8).map((p) => p.party));
+    const main = parties
+      .filter((p) => own.has(p.party))
+      .sort((a, b) => BLOC_ORDER[a.bloc]! - BLOC_ORDER[b.bloc]! || b.members.length - a.members.length || a.party.localeCompare(b.party));
+    const rest = parties.filter((p) => !own.has(p.party));
+    const colors = new Map<string, string>();
+    main.forEach((p, i) => colors.set(p.party, PARTY_PALETTE[i]!));
+    rest.forEach((p) => colors.set(p.party, NEUTRAL_GRAY));
+    return { main, rest, colors };
   }, [parliamentarians]);
+  const partyColor = (party: string) => partyLayout.colors.get(party) ?? NEUTRAL_GRAY;
+
+
 
   // Initialize new vote form with current deputies
   const handleOpenNewVote = () => {
@@ -242,7 +215,7 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
   const handleSaveVotingSessionSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newVoteForm.matterCode || !newVoteForm.matterTitle) {
-      alert('Preencha o número e o título da matéria.');
+      dialog.alert({ title: 'Campos obrigatórios', message: 'Preencha o número e o título da matéria.', tone: 'warning' });
       return;
     }
 
@@ -306,7 +279,7 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
         groups[dep.party] = {
           totalScore: 0,
           count: 0,
-          color: dep.partyColor || '#102C45',
+          color: partyColor(dep.party),
           deputies: [],
         };
       }
@@ -322,115 +295,84 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
       color: data.color,
       deputies: data.deputies,
     })).sort((a, b) => b.avgAlignment - a.avgAlignment);
-  }, [parliamentarians, selectedThemeStrategy]);
+  }, [parliamentarians, selectedThemeStrategy, partyLayout]);
 
-  // Helper for seat visual styles based on chamberViewMode
-  const getSeatVisuals = (deputy: Parliamentarian | undefined) => {
-    if (!deputy) {
-      return {
-        bg: '#F1F5F9',
-        border: '#CBD5E1',
-        text: '#94A3B8',
-        tag: 'Vaga',
-        glow: 'none',
-        voteIcon: null,
-      };
-    }
-
-    const isMandate = deputy.id === 'dep-01';
-
+  // ---- Hemicycle groups per view mode (colors validated with the dataviz palette checker) ----
+  const filteredIds = useMemo(() => new Set(filteredDeputies.map((d) => d.id)), [filteredDeputies]);
+  const chamberGroups = useMemo((): { heading: string; note?: string; groups: HemicycleGroup[] } => {
+    const bySeat = (a: Parliamentarian, b: Parliamentarian) => a.seatNumber - b.seatNumber;
     if (chamberViewMode === 'partidos') {
-      const pColor = deputy.partyColor || '#102C45';
-      return {
-        bg: isMandate ? '#102C45' : '#FFFFFF',
-        border: pColor,
-        text: isMandate ? '#FFFFFF' : '#0F172A',
-        tag: deputy.party,
-        glow: isMandate ? '#36B7A5' : pColor,
-        voteIcon: null,
-      };
+      const { main, rest } = partyLayout;
+      const groups: HemicycleGroup[] = main.map((p) => ({
+        key: p.party,
+        label: p.party,
+        color: partyLayout.colors.get(p.party)!,
+        members: p.members,
+        note: p.bloc === 'Governo' ? 'Base do Governo' : p.bloc,
+      }));
+      if (rest.length) {
+        const others: HemicycleGroup = {
+          key: '__outros',
+          label: 'Outros partidos',
+          color: NEUTRAL_GRAY,
+          members: rest.flatMap((p) => p.members).sort(bySeat),
+          detail: rest.map((p) => `${p.party} (${p.members.length})`).join(' · '),
+          note: 'Diversos',
+        };
+        const firstOpp = groups.findIndex((g) => main.find((m) => m.party === g.key)?.bloc === 'Oposição');
+        groups.splice(firstOpp === -1 ? groups.length : firstOpp, 0, others);
+      }
+      return { heading: 'Partido', note: 'Bloco', groups };
     }
-
     if (chamberViewMode === 'blocos') {
-      let bColor = '#10B981';
-      if (deputy.bloc === 'Oposição') bColor = '#EF4444';
-      else if (deputy.bloc === 'Independente') bColor = '#F59E0B';
-
+      const def: [Parliamentarian['bloc'], string, string][] = [
+        ['Governo', 'Base do Governo', GOOD],
+        ['Independente', 'Independentes', NEUTRAL_GRAY],
+        ['Oposição', 'Oposição', BAD],
+      ];
       return {
-        bg: isMandate ? '#102C45' : '#FFFFFF',
-        border: bColor,
-        text: isMandate ? '#FFFFFF' : '#0F172A',
-        tag: deputy.bloc,
-        glow: bColor,
-        voteIcon: null,
+        heading: 'Bloco',
+        groups: def.map(([bloc, label, color]) => ({ key: bloc, label, color, members: parliamentarians.filter((p) => p.bloc === bloc).sort(bySeat) })),
       };
     }
-
     if (chamberViewMode === 'alinhamento') {
-      const score = deputy.alignmentScore;
-      let aColor = '#10B981';
-      if (score < 50) aColor = '#EF4444';
-      else if (score < 75) aColor = '#F59E0B';
-      else if (score < 90) aColor = '#0EA5E9';
-
+      const def: [string, string, string, (s: number) => boolean][] = [
+        ['a', 'Alto (90% ou mais)', GOOD, (s) => s >= 90],
+        ['b', 'Moderado (75–89%)', GOOD_LIGHT, (s) => s >= 75 && s < 90],
+        ['c', 'Baixo (50–74%)', BAD_LIGHT, (s) => s >= 50 && s < 75],
+        ['d', 'Divergente (abaixo de 50%)', BAD, (s) => s < 50],
+      ];
       return {
-        bg: isMandate ? '#102C45' : '#FFFFFF',
-        border: aColor,
-        text: isMandate ? '#FFFFFF' : '#0F172A',
-        tag: `${score}%`,
-        glow: aColor,
-        voteIcon: null,
+        heading: 'Fidelidade ao mandato',
+        groups: def.map(([key, label, color, test]) => ({
+          key,
+          label,
+          color,
+          members: parliamentarians.filter((p) => test(p.alignmentScore)).sort((a, b) => b.alignmentScore - a.alignmentScore),
+        })),
       };
     }
-
-    // chamberViewMode === 'votacao'
-    const vote = inspectVoteSession?.votes[deputy.id] || 'ausente';
-    if (vote === 'sim') {
-      return {
-        bg: '#ECFDF5',
-        border: '#10B981',
-        text: '#065F46',
-        tag: 'SIM',
-        glow: '#10B981',
-        voteIcon: 'sim',
-      };
-    }
-    if (vote === 'nao') {
-      return {
-        bg: '#FEF2F2',
-        border: '#EF4444',
-        text: '#991B1B',
-        tag: 'NÃO',
-        glow: '#EF4444',
-        voteIcon: 'nao',
-      };
-    }
-    if (vote === 'abstencao') {
-      return {
-        bg: '#FFFBEB',
-        border: '#F59E0B',
-        text: '#92400E',
-        tag: 'ABS',
-        glow: '#F59E0B',
-        voteIcon: 'abs',
-      };
-    }
+    const vote = (p: Parliamentarian) => inspectVoteSession?.votes[p.id] ?? 'ausente';
+    const def: [string, string, string, boolean][] = [
+      ['sim', 'Sim', GOOD, false],
+      ['abstencao', 'Abstenção', NEUTRAL_GRAY, false],
+      ['ausente', 'Ausente', NEUTRAL_GRAY, true],
+      ['nao', 'Não', BAD, false],
+    ];
     return {
-      bg: '#F8FAFC',
-      border: '#94A3B8',
-      text: '#475569',
-      tag: 'AUS',
-      glow: '#94A3B8',
-      voteIcon: 'aus',
+      heading: 'Voto',
+      groups: def.map(([key, label, color, hollow]) => ({
+        key,
+        label,
+        color,
+        hollow,
+        members: parliamentarians.filter((p) => vote(p) === key).sort(bySeat),
+      })),
     };
-  };
+  }, [chamberViewMode, parliamentarians, inspectVoteSession, partyLayout]);
 
   return (
     <div className="space-y-4">
-      <DemoNoticeBanner
-        moduleName="Composição do Plenário & Inteligência Parlamentar (ALMT)"
-        contextText="Visualização da Composição do Plenário de 24 cadeiras da Assembleia Legislativa de Mato Grosso, gestão de bancadas e registro de votações nominais para traçar estratégias políticas."
-      />
 
       {/* Top Header & Navigation Bar */}
       <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -443,7 +385,7 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
               <h1 className="text-lg font-bold text-slate-900 tracking-tight flex items-center gap-2">
                 Composição do Plenário & Inteligência de Bancadas
                 <span className="text-[11px] font-mono px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold">
-                  24 Cadeiras Titulares
+                  {parliamentarians.length} Cadeiras Titulares
                 </span>
               </h1>
               <p className="text-xs text-slate-500">
@@ -517,439 +459,97 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
           {/* Main Plenary Chamber View */}
           <div className="lg:col-span-8 space-y-3">
-            {/* Plenary Chamber Card */}
-            <div className="bg-gradient-to-b from-[#0F2942] to-[#102C45] border border-slate-800 rounded-2xl shadow-xl overflow-hidden relative text-white">
-              {/* Plenary Top Info Bar & Electronic Header */}
-              <div className="px-5 py-3.5 bg-black/30 border-b border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div className="flex items-center gap-2.5">
-                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse inline-block"></span>
+            {/* Plenary composition: classic parliament diagram + results table */}
+            <div className="bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden">
+              <div className="px-5 pt-4 pb-3 border-b border-slate-100 flex flex-col gap-3">
+                <div className="flex flex-wrap items-start justify-between gap-2">
                   <div>
-                    <h2 className="text-xs font-bold tracking-wider uppercase text-emerald-400 font-mono flex items-center gap-2">
-                      Plenário das Deliberações Renê Barbour · ALMT
-                    </h2>
-                    <p className="text-[11px] text-slate-300">
-                      Assembleia Legislativa do Estado de Mato Grosso · 20ª Legislatura
+                    <h2 className="text-sm font-bold text-slate-900">Composição do Plenário · ALMT</h2>
+                    <p className="text-[11px] text-slate-500">
+                      Assembleia Legislativa do Estado de Mato Grosso · 20ª Legislatura · {parliamentarians.length} cadeiras
                     </p>
                   </div>
-                </div>
-
-                {/* Quorum Summary Pill */}
-                <div className="flex items-center gap-2 font-mono text-[11px] bg-white/10 px-3 py-1 rounded-lg border border-white/10 self-start sm:self-auto">
-                  <span className="text-slate-300">Presentes: <strong className="text-white">24/24</strong></span>
-                  <span className="text-white/30">|</span>
-                  <span className="text-slate-300">M. Simples: <strong className="text-amber-300">13</strong></span>
-                  <span className="text-white/30">|</span>
-                  <span className="text-slate-300">2/3: <strong className="text-emerald-300">16</strong></span>
-                </div>
-              </div>
-
-              {/* View Mode Switcher Toolbar */}
-              <div className="px-5 py-2.5 bg-white/5 border-b border-white/10 flex flex-wrap items-center justify-between gap-2 text-xs">
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[11px] font-semibold text-slate-300 mr-1 flex items-center gap-1">
-                    <Eye className="w-3.5 h-3.5 text-[#36B7A5]" /> Modo de Visualização:
-                  </span>
-                  <div className="inline-flex rounded-lg bg-black/30 p-0.5 border border-white/10">
-                    <button
-                      onClick={() => setChamberViewMode('partidos')}
-                      className={`px-2.5 py-1 rounded text-[11px] font-medium transition-colors ${
-                        chamberViewMode === 'partidos'
-                          ? 'bg-[#176B80] text-white shadow-xs font-bold'
-                          : 'text-slate-300 hover:text-white'
-                      }`}
-                    >
-                      Bancadas & Partidos
-                    </button>
-                    <button
-                      onClick={() => setChamberViewMode('blocos')}
-                      className={`px-2.5 py-1 rounded text-[11px] font-medium transition-colors ${
-                        chamberViewMode === 'blocos'
-                          ? 'bg-[#176B80] text-white shadow-xs font-bold'
-                          : 'text-slate-300 hover:text-white'
-                      }`}
-                    >
-                      Blocos Políticos
-                    </button>
-                    <button
-                      onClick={() => setChamberViewMode('alinhamento')}
-                      className={`px-2.5 py-1 rounded text-[11px] font-medium transition-colors ${
-                        chamberViewMode === 'alinhamento'
-                          ? 'bg-[#176B80] text-white shadow-xs font-bold'
-                          : 'text-slate-300 hover:text-white'
-                      }`}
-                    >
-                      Fidelidade ao Mandato
-                    </button>
-                    <button
-                      onClick={() => setChamberViewMode('votacao')}
-                      className={`px-2.5 py-1 rounded text-[11px] font-medium transition-colors ${
-                        chamberViewMode === 'votacao'
-                          ? 'bg-emerald-600 text-white shadow-xs font-bold'
-                          : 'text-slate-300 hover:text-white'
-                      }`}
-                    >
-                      Placar da Sessão ({inspectVoteSession?.matterCode || 'PL'})
-                    </button>
+                  <div className="flex items-center gap-2 font-mono text-[11px] text-slate-600 bg-slate-50 border border-slate-200 px-2.5 py-1 rounded-lg">
+                    <span>
+                      Maioria simples <strong className="text-slate-900">{Math.floor(parliamentarians.length / 2) + 1}</strong>
+                    </span>
+                    <span className="text-slate-300">|</span>
+                    <span>
+                      2/3 <strong className="text-slate-900">{Math.ceil((parliamentarians.length * 2) / 3)}</strong>
+                    </span>
                   </div>
                 </div>
-
-                {/* Quick Legend for Current Mode */}
-                <div className="flex items-center gap-3 text-[11px] text-slate-300">
-                  {chamberViewMode === 'partidos' && (
-                    <div className="flex items-center gap-2">
-                      <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-[#102C45] border border-white/40"></span> União (6)</span>
-                      <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-[#1D4ED8]"></span> PL (4)</span>
-                      <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-[#059669]"></span> MDB (4)</span>
-                      <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-[#D97706]"></span> PSB (3)</span>
-                      <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-[#DC2626]"></span> PT (2)</span>
-                    </div>
-                  )}
-
-                  {chamberViewMode === 'blocos' && (
-                    <div className="flex items-center gap-2.5">
-                      <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span> Base Governo (17)</span>
-                      <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span> Independente (5)</span>
-                      <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-rose-500"></span> Oposição (2)</span>
-                    </div>
-                  )}
-
-                  {chamberViewMode === 'alinhamento' && (
-                    <div className="flex items-center gap-2">
-                      <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500"></span> ≥80% Fiel</span>
-                      <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-sky-400"></span> 60-79%</span>
-                      <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400"></span> 40-59%</span>
-                      <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-500"></span> &lt;40% Oposição</span>
-                    </div>
-                  )}
-
-                  {chamberViewMode === 'votacao' && inspectVoteSession && (
-                    <div className="flex items-center gap-2 font-mono">
-                      <span className="text-emerald-400 font-bold">
-                        SIM: {Object.values(inspectVoteSession.votes).filter((v) => v === 'sim').length}
-                      </span>
-                      <span>·</span>
-                      <span className="text-rose-400 font-bold">
-                        NÃO: {Object.values(inspectVoteSession.votes).filter((v) => v === 'nao').length}
-                      </span>
-                    </div>
-                  )}
+                <div className="inline-flex flex-wrap rounded-lg bg-slate-100 p-0.5 self-start" role="tablist" aria-label="Modo de visualização">
+                  {(
+                    [
+                      ['partidos', 'Partidos'],
+                      ['blocos', 'Blocos Políticos'],
+                      ['alinhamento', 'Fidelidade ao Mandato'],
+                      ['votacao', `Placar ${inspectVoteSession?.matterCode ?? 'da Sessão'}`],
+                    ] as const
+                  ).map(([mode, label]) => (
+                    <button
+                      key={mode}
+                      role="tab"
+                      aria-selected={chamberViewMode === mode}
+                      onClick={() => setChamberViewMode(mode)}
+                      className={`px-3 py-1.5 rounded-md text-[11px] font-semibold transition-colors ${
+                        chamberViewMode === mode ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
                 </div>
+                {chamberViewMode === 'votacao' && inspectVoteSession && (
+                  <p className="text-[11px] text-slate-600">
+                    <strong className="text-slate-900">{inspectVoteSession.matterCode}</strong> · {inspectVoteSession.matterTitle}
+                  </p>
+                )}
               </div>
 
-              {/* Main SVG Plenary Graphic */}
-              <div className="relative py-4 px-2 flex flex-col items-center justify-center select-none overflow-x-auto">
-                <svg
-                  viewBox="0 0 760 440"
-                  className="w-full max-w-[760px] select-none filter drop-shadow-md"
-                  style={{ maxHeight: '420px' }}
-                >
-                  <defs>
-                    {/* Chamber Wood Rostrum Gradient */}
-                    <linearGradient id="rostrumWood" x1="0%" y1="0%" x2="100%" y2="100%">
-                      <stop offset="0%" stopColor="#2E1B0E" />
-                      <stop offset="50%" stopColor="#4A2F1B" />
-                      <stop offset="100%" stopColor="#1E1107" />
-                    </linearGradient>
-
-                    {/* Floor Carpet Radial Inlay */}
-                    <radialGradient id="carpetFloor" cx="50%" cy="75%" r="75%">
-                      <stop offset="0%" stopColor="#174163" stopOpacity="0.45" />
-                      <stop offset="60%" stopColor="#0B1C2D" stopOpacity="0.8" />
-                      <stop offset="100%" stopColor="#081420" stopOpacity="1" />
-                    </radialGradient>
-
-                    {/* Golden Mandate Glow Filter */}
-                    <filter id="mandateGlow" x="-30%" y="-30%" width="160%" height="160%">
-                      <feGaussianBlur stdDeviation="3" result="blur" />
-                      <feComposite in="SourceGraphic" in2="blur" operator="over" />
-                    </filter>
-                  </defs>
-
-                  {/* Chamber Floor Backdrop */}
-                  <rect x="0" y="0" width="760" height="440" rx="16" fill="url(#carpetFloor)" />
-
-                  {/* Concentric Tier Carpeting Arcs (Floor Inlays) */}
-                  <path
-                    d="M 125 310 A 255 255 0 0 1 635 310"
-                    fill="none"
-                    stroke="#1E476B"
-                    strokeWidth="48"
-                    strokeOpacity="0.3"
-                  />
-                  <path
-                    d="M 190 310 A 190 190 0 0 1 570 310"
-                    fill="none"
-                    stroke="#1E476B"
-                    strokeWidth="44"
-                    strokeOpacity="0.4"
-                  />
-                  <path
-                    d="M 255 310 A 125 125 0 0 1 505 310"
-                    fill="none"
-                    stroke="#1E476B"
-                    strokeWidth="40"
-                    strokeOpacity="0.45"
-                  />
-
-                  {/* Decorative Radial Aisles (Corredores de Circulação) */}
-                  <line x1="380" y1="310" x2="380" y2="40" stroke="#38BDF8" strokeWidth="1" strokeDasharray="3 3" opacity="0.3" />
-                  <line x1="380" y1="310" x2="160" y2="120" stroke="#38BDF8" strokeWidth="1" strokeDasharray="3 3" opacity="0.25" />
-                  <line x1="380" y1="310" x2="600" y2="120" stroke="#38BDF8" strokeWidth="1" strokeDasharray="3 3" opacity="0.25" />
-
-                  {/* Sector Labels */}
-                  <text x="210" y="45" fill="#94A3B8" fontSize="10" fontWeight="bold" letterSpacing="1" opacity="0.6">
-                    ALA ESQUERDA
-                  </text>
-                  <text x="380" y="32" textAnchor="middle" fill="#38BDF8" fontSize="10" fontWeight="bold" letterSpacing="1" opacity="0.8">
-                    CORREDOR CENTRAL
-                  </text>
-                  <text x="550" y="45" fill="#94A3B8" fontSize="10" fontWeight="bold" letterSpacing="1" opacity="0.6">
-                    ALA DIREITA
-                  </text>
-
-                  {/* ========================================== */}
-                  {/* MESA DIRETORA (ROSTRUM ELEVADO)            */}
-                  {/* ========================================== */}
-                  <g transform="translate(380, 345)">
-                    {/* Shadow / Base */}
-                    <rect x="-140" y="-12" width="280" height="60" rx="8" fill="#050B12" opacity="0.6" />
-
-                    {/* Main Wood Podium */}
-                    <rect
-                      x="-135"
-                      y="-15"
-                      width="270"
-                      height="56"
-                      rx="8"
-                      fill="url(#rostrumWood)"
-                      stroke="#854D0E"
-                      strokeWidth="1.5"
-                    />
-
-                    {/* Metallic Gold Accent Trim */}
-                    <rect x="-125" y="-10" width="250" height="2" fill="#FACC15" opacity="0.7" />
-
-                    {/* Coat of Arms ALMT Badge */}
-                    <circle cx="0" cy="12" r="14" fill="#102C45" stroke="#FACC15" strokeWidth="1.5" />
-                    <text x="0" y="15" textAnchor="middle" fill="#FACC15" fontSize="8" fontWeight="bold" fontFamily="monospace">
-                      ALMT
-                    </text>
-
-                    {/* Presidency Seats on Rostrum */}
-                    {/* 1º Secretário (Left) */}
-                    <g transform="translate(-70, 10)">
-                      <rect x="-24" y="-12" width="48" height="24" rx="4" fill="#102C45" stroke="#38BDF8" strokeWidth="1" />
-                      <text x="0" y="3" textAnchor="middle" fill="#FFFFFF" fontSize="8" fontWeight="bold">
-                        1ª SEC.
-                      </text>
-                    </g>
-
-                    {/* Presidente da ALMT (Center) */}
-                    <g transform="translate(0, -28)">
-                      <rect x="-35" y="-12" width="70" height="24" rx="4" fill="#102C45" stroke="#FACC15" strokeWidth="1.5" />
-                      <text x="0" y="3" textAnchor="middle" fill="#FACC15" fontSize="9" fontWeight="bold">
-                        PRESIDENTE
-                      </text>
-                      {/* Microphone */}
-                      <circle cx="0" cy="-14" r="2.5" fill="#EF4444" />
-                      <line x1="0" y1="-12" x2="0" y2="-6" stroke="#94A3B8" strokeWidth="1" />
-                    </g>
-
-                    {/* 2º Secretário (Right) */}
-                    <g transform="translate(70, 10)">
-                      <rect x="-24" y="-12" width="48" height="24" rx="4" fill="#102C45" stroke="#38BDF8" strokeWidth="1" />
-                      <text x="0" y="3" textAnchor="middle" fill="#FFFFFF" fontSize="8" fontWeight="bold">
-                        2ª SEC.
-                      </text>
-                    </g>
-
-                    <text x="0" y="36" textAnchor="middle" fill="#CBD5E1" fontSize="9" fontWeight="bold" letterSpacing="0.5">
-                      MESA DIRETORA · PRESIDÊNCIA DA ASSEMBLEIA
-                    </text>
-                  </g>
-
-                  {/* Tribuna dos Oradores (Speaker Podium on Right) */}
-                  <g transform="translate(640, 340)">
-                    <rect x="-25" y="-15" width="50" height="32" rx="4" fill="url(#rostrumWood)" stroke="#854D0E" strokeWidth="1" />
-                    <text x="0" y="4" textAnchor="middle" fill="#F1F5F9" fontSize="8" fontWeight="bold">
-                      TRIBUNA
-                    </text>
-                    <line x1="0" y1="-15" x2="0" y2="-22" stroke="#CBD5E1" strokeWidth="1.5" />
-                    <circle cx="0" cy="-24" r="2.5" fill="#10B981" />
-                  </g>
-
-                  {/* ========================================== */}
-                  {/* RENDER 24 PARLIAMENTARY SEAT DESKS        */}
-                  {/* ========================================== */}
-                  {Array.from({ length: 24 }).map((_, idx) => {
-                    const seatNum = idx + 1;
-                    const coord = seatCoordinates[seatNum];
-                    if (!coord) return null;
-                    const deputy = seatToDeputyMap.get(seatNum);
-                    const isSelected = selectedDeputy?.seatNumber === seatNum;
-                    const isMandate = deputy?.id === 'dep-01';
-                    const visuals = getSeatVisuals(deputy);
-
-                    return (
-                      <g
-                        key={seatNum}
-                        onClick={() => deputy && setSelectedDeputy(deputy)}
-                        className="cursor-pointer transition-transform duration-200 group"
-                        transform={`translate(${coord.x}, ${coord.y})`}
-                      >
-                        {/* Outer Selection Pulse Ring */}
-                        {isSelected && (
-                          <rect
-                            x="-26"
-                            y="-24"
-                            width="52"
-                            height="48"
-                            rx="12"
-                            fill="none"
-                            stroke="#36B7A5"
-                            strokeWidth="3"
-                            className="animate-pulse"
-                          />
-                        )}
-
-                        {/* Mandate Golden Halo */}
-                        {isMandate && (
-                          <rect
-                            x="-25"
-                            y="-23"
-                            width="50"
-                            height="46"
-                            rx="11"
-                            fill="none"
-                            stroke="#F59E0B"
-                            strokeWidth="2"
-                            strokeDasharray="4 2"
-                            filter="url(#mandateGlow)"
-                          />
-                        )}
-
-                        {/* Desk Contour (Rounded Console) */}
-                        <rect
-                          x="-22"
-                          y="-20"
-                          width="44"
-                          height="40"
-                          rx="8"
-                          fill={visuals.bg}
-                          stroke={visuals.border}
-                          strokeWidth={isSelected ? '2.5' : '1.8'}
-                          className="drop-shadow-sm group-hover:scale-105 transition-all"
-                        />
-
-                        {/* Deputy Initials / Avatar Monogram */}
-                        <text
-                          x="0"
-                          y="-3"
-                          textAnchor="middle"
-                          fill={visuals.text}
-                          fontSize="11"
-                          fontWeight="bold"
-                          fontFamily="sans-serif"
-                        >
-                          {deputy?.avatar || `#${seatNum}`}
-                        </text>
-
-                        {/* Bottom Tag Badge (Party / Bloc / Vote) */}
-                        <rect
-                          x="-18"
-                          y="6"
-                          width="36"
-                          height="11"
-                          rx="3"
-                          fill={isMandate ? '#36B7A5' : visuals.border}
-                        />
-                        <text
-                          x="0"
-                          y="14.5"
-                          textAnchor="middle"
-                          fill={isMandate ? '#102C45' : '#FFFFFF'}
-                          fontSize="7.5"
-                          fontWeight="bold"
-                          fontFamily="monospace"
-                        >
-                          {visuals.tag}
-                        </text>
-
-                        {/* Seat Number Top Pin */}
-                        <circle
-                          cx="16"
-                          cy="-16"
-                          r="7"
-                          fill="#0F2942"
-                          stroke="#FFFFFF"
-                          strokeWidth="1"
-                        />
-                        <text
-                          x="16"
-                          y="-13.5"
-                          textAnchor="middle"
-                          fill="#FFFFFF"
-                          fontSize="7.5"
-                          fontWeight="bold"
-                          fontFamily="monospace"
-                        >
-                          {seatNum}
-                        </text>
-
-                        {/* Mandate Crown/Star Icon */}
-                        {isMandate && (
-                          <circle cx="-16" cy="-16" r="6" fill="#F59E0B" stroke="#FFFFFF" strokeWidth="1" />
-                        )}
-
-                        {/* Tooltip for hover */}
-                        <title>
-                          {deputy
-                            ? `Cadeira #${seatNum}: ${deputy.popularName}\nPartido: ${deputy.party} · Bloco: ${deputy.bloc}\nAlinhamento Mandato: ${deputy.alignmentScore}%\nBase: ${deputy.electoralBase}`
-                            : `Cadeira #${seatNum} (Disponível)`}
-                        </title>
-                      </g>
-                    );
-                  })}
-                </svg>
+              <div className="px-5 py-4">
+                <HemicycleChart
+                  groups={chamberGroups.groups}
+                  groupHeading={chamberGroups.heading}
+                  showNote={chamberGroups.note}
+                  selectedId={selectedDeputy?.id}
+                  mandateId="dep-01"
+                  isDimmed={(p) => !filteredIds.has(p.id)}
+                  onSelect={setSelectedDeputy}
+                />
               </div>
 
-              {/* Plenary Bottom Footer Bar */}
-              <div className="px-5 py-2.5 bg-black/40 border-t border-white/10 flex flex-wrap items-center justify-between text-xs text-slate-300 gap-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-[11px] text-slate-400">Filtrar bancada:</span>
+              <div className="px-5 py-2.5 bg-slate-50 border-t border-slate-100 flex flex-wrap items-center justify-between text-xs text-slate-600 gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[11px] text-slate-500">Destacar:</span>
                   <select
                     value={filterBloc}
                     onChange={(e) => setFilterBloc(e.target.value)}
-                    className="px-2 py-0.5 bg-white/10 border border-white/20 rounded text-[11px] text-white focus:outline-none"
+                    className="px-2 py-1 bg-white border border-slate-200 rounded-md text-[11px] text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-[#176B80]"
                   >
-                    <option value="todos" className="bg-[#102C45] text-white">Todos os Blocos</option>
-                    <option value="Governo" className="bg-[#102C45] text-white">Base Governo</option>
-                    <option value="Independente" className="bg-[#102C45] text-white">Independentes</option>
-                    <option value="Oposição" className="bg-[#102C45] text-white">Oposição</option>
+                    <option value="todos">Todos os blocos</option>
+                    <option value="Governo">Base do Governo</option>
+                    <option value="Independente">Independentes</option>
+                    <option value="Oposição">Oposição</option>
                   </select>
-
                   <select
                     value={filterParty}
                     onChange={(e) => setFilterParty(e.target.value)}
-                    className="px-2 py-0.5 bg-white/10 border border-white/20 rounded text-[11px] text-white focus:outline-none"
+                    className="px-2 py-1 bg-white border border-slate-200 rounded-md text-[11px] text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-[#176B80]"
                   >
-                    <option value="todos" className="bg-[#102C45] text-white">Todos os Partidos</option>
+                    <option value="todos">Todos os partidos</option>
                     {uniqueParties.map((pty) => (
-                      <option key={pty} value={pty} className="bg-[#102C45] text-white">
+                      <option key={pty} value={pty}>
                         {pty}
                       </option>
                     ))}
                   </select>
                 </div>
-
-                <div className="flex items-center gap-2 text-[11px] font-mono text-slate-300">
-                  <span className="flex items-center gap-1">
-                    <span className="w-2 h-2 rounded-full bg-amber-400"></span>
-                    ★ Seu Mandato: Cadeira #01
-                  </span>
-                  <span>·</span>
-                  <span>24 Deputados Estaduais</span>
-                </div>
+                <span className="flex items-center gap-1.5 text-[11px]">
+                  <span className="w-3 h-3 rounded-full border-2 border-dashed border-[#36B7A5]" />
+                  Seu mandato · cadeira nº 1
+                </span>
               </div>
             </div>
           </div>
@@ -966,7 +566,7 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
                       style={{
                         backgroundColor: selectedDeputy.id === 'dep-01' ? '#102C45' : '#F8FAFC',
                         color: selectedDeputy.id === 'dep-01' ? '#36B7A5' : '#102C45',
-                        borderColor: selectedDeputy.id === 'dep-01' ? '#36B7A5' : selectedDeputy.partyColor || '#CBD5E1',
+                        borderColor: selectedDeputy.id === 'dep-01' ? '#36B7A5' : partyColor(selectedDeputy.party),
                       }}
                     >
                       {selectedDeputy.avatar || selectedDeputy.name.slice(0, 2).toUpperCase()}
@@ -1013,7 +613,7 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
                     <span className="font-bold text-slate-900 flex items-center gap-1.5 mt-0.5">
                       <span
                         className="w-2.5 h-2.5 rounded-full inline-block"
-                        style={{ backgroundColor: selectedDeputy.partyColor || '#102C45' }}
+                        style={{ backgroundColor: partyColor(selectedDeputy.party) }}
                       />
                       {selectedDeputy.party}
                     </span>

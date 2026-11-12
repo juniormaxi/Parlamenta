@@ -18,7 +18,6 @@ import {
   Mail,
 } from 'lucide-react';
 import { KpiCard } from '../common/KpiCard';
-import { DemoNoticeBanner } from '../common/DemoNoticeBanner';
 import { Protocol, FlowTask, CalendarEvent, TeamMember, ModuleType } from '../../types';
 
 interface DashboardModuleProps {
@@ -68,11 +67,6 @@ export const DashboardModule: React.FC<DashboardModuleProps> = ({
 
   return (
     <div className="space-y-6 pb-12">
-      <DemoNoticeBanner
-        moduleName="Visão Geral"
-        contextText="Painel executivo com consolidação de demandas de Mato Grosso, tarefas operacionais e compromissos do mandato."
-        onOpenDocs={() => onNavigate('relatorios')}
-      />
 
       {/* Top Header & Quick Actions */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">

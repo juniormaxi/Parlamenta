@@ -16,7 +16,6 @@ import {
   Users,
 } from 'lucide-react';
 import { MunicipalityData } from '../../types';
-import { DemoNoticeBanner } from '../common/DemoNoticeBanner';
 import { KpiCard } from '../common/KpiCard';
 import { OpenStreetDemandHeatMap } from './territorial/OpenStreetDemandHeatMap';
 
@@ -87,10 +86,6 @@ export const InteligenciaTerritorialModule: React.FC<InteligenciaTerritorialModu
 
   return (
     <div className="space-y-4">
-      <DemoNoticeBanner
-        moduleName="Inteligência Territorial (Mato Grosso)"
-        contextText="Dados de votação e demandas mapeados por município. Simulação estritamente agregada: proibido cruzamento com dados pessoais de cidadãos (LGPD)."
-      />
 
       {/* Top Header & Independent Tabs (Requisito MVP) */}
       <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">

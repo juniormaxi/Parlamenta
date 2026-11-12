@@ -23,7 +23,6 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import { NewsletterSubscriber, NewsletterCampaign } from '../../types';
-import { DemoNoticeBanner } from '../common/DemoNoticeBanner';
 import { KpiCard } from '../common/KpiCard';
 
 interface NewsletterModuleProps {
@@ -167,10 +166,6 @@ export const NewsletterModule: React.FC<NewsletterModuleProps> = ({
 
   return (
     <div className="space-y-4">
-      <DemoNoticeBanner
-        moduleName="Comunicação · Gestão de Newsletter"
-        contextText="Cadastros de cidadãos recebidos pelo site oficial, segmentação por temas de interesse e disparo de informativos com opt-out LGPD."
-      />
 
       {/* Header & Controls */}
       <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">

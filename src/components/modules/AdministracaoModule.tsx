@@ -25,7 +25,7 @@ import {
   SlidersHorizontal,
 } from 'lucide-react';
 import { AuditLog, TeamMember } from '../../types';
-import { DemoNoticeBanner } from '../common/DemoNoticeBanner';
+import { useDialog } from '../common/Dialogs';
 
 interface AdministracaoModuleProps {
   auditLogs: AuditLog[];
@@ -36,6 +36,7 @@ export const AdministracaoModule: React.FC<AdministracaoModuleProps> = ({
   auditLogs,
   teamMembers,
 }) => {
+  const dialog = useDialog();
   const [activeTab, setActiveTab] = useState<'usuarios' | 'sla' | 'seguranca' | 'auditoria' | 'ia'>('ia');
 
   // SLA rules
@@ -149,10 +150,6 @@ export const AdministracaoModule: React.FC<AdministracaoModuleProps> = ({
 
   return (
     <div className="space-y-4">
-      <DemoNoticeBanner
-        moduleName="Administração & Governança de Gabinete"
-        contextText="Configurações de perfis de acesso RBAC, políticas de segurança MFA, prazos de SLA, integração de Inteligência Artificial e trilha imutável de auditoria (LGPD)."
-      />
 
       {/* Header & Tabs */}
       <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -944,7 +941,7 @@ export const AdministracaoModule: React.FC<AdministracaoModuleProps> = ({
               </p>
             </div>
             <button
-              onClick={() => alert('Convite de novo membro enviado para e-mail institucional.')}
+              onClick={() => dialog.toast('Convite de novo membro enviado para o e-mail institucional.')}
               className="px-3 py-1.5 text-xs font-semibold text-white bg-[#102C45] rounded-lg"
             >
               Convidar Membro
@@ -1014,7 +1011,7 @@ export const AdministracaoModule: React.FC<AdministracaoModuleProps> = ({
                     {r.hours} horas ({Math.round(r.hours / 24)} dias)
                   </span>
                   <button
-                    onClick={() => alert(`Ajustar prazo de SLA para o tema: ${r.theme}`)}
+                    onClick={() => dialog.alert({ title: 'Ajustar prazo de SLA', message: `Ajustar prazo de SLA para o tema: ${r.theme}` })}
                     className="text-xs text-[#176B80] hover:underline font-semibold"
                   >
                     Editar Regra
