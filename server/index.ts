@@ -10,6 +10,7 @@ import { bancoRouter, startSpeechWorker } from './banco';
 import { clippingRouter, startClippingScheduler } from './clipping';
 import { tenantProtocolsRouter, publicRouter } from './protocols';
 import { startEmailWorker } from './mailer';
+import { whatsappRouter, startWhatsApp, forgetWhatsAppTenant } from './whatsapp';
 import { db, tx, migrate, audit, tenantStorageBytes, dbFileBytes } from './db';
 import {
   TENANT_ROLES,
@@ -356,6 +357,7 @@ api.delete('/admin/tenants/:id', requireSuperAdmin, async (req, res) => {
   if (req.body?.confirmSlug !== t.slug) throw bad('Confirme digitando o slug do gabinete.');
   if (t.status !== 'suspended') throw bad('Suspenda o gabinete antes de excluí-lo.');
   await db.prepare(`DELETE FROM tenants WHERE id = ?`).run(t.id); // cascades users, sessions, records
+  await forgetWhatsAppTenant(t.id);
   await audit({ ...actor(req), tenantId: t.id, action: 'tenant.deleted', target: t.slug });
   res.json({ ok: true });
 });
@@ -520,6 +522,9 @@ tenant.use('/clipping', clippingRouter);
 // Protocolos & Demandas — always scoped to the session's tenant.
 tenant.use('/protocols', tenantProtocolsRouter);
 
+// WhatsApp (wacli): conexão do número, conversas e envio — always scoped to the session's tenant.
+tenant.use('/whatsapp', whatsappRouter);
+
 api.use('/tenant', tenant);
 // Site do parlamentar (sem login): abertura de demanda e consulta de protocolo.
 api.use('/public', publicRouter);
@@ -547,6 +552,7 @@ if (fs.existsSync(dist)) {
 await startSpeechWorker();
 await startClippingScheduler();
 startEmailWorker();
+await startWhatsApp();
 
 app.listen(PORT, HOST, () => {
   console.log(`Parlamenta API em http://${HOST}:${PORT}/api`);

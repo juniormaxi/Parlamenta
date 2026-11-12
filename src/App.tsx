@@ -76,6 +76,8 @@ import { ParlamentoHemicicloModule } from './components/modules/legislativo/Parl
 import { ProjetosLeiModule } from './components/modules/legislativo/ProjetosLeiModule';
 import { OficiosModule } from './components/modules/legislativo/OficiosModule';
 import { IntegracoesModule } from './components/modules/IntegracoesModule';
+import { WhatsAppModule, type ProtocolPrefill } from './components/modules/WhatsAppModule';
+import { wa } from './lib/whatsapp';
 import { RelatoriosModule } from './components/modules/RelatoriosModule';
 import { AdministracaoModule } from './components/modules/AdministracaoModule';
 import { ContatosModule } from './components/modules/banco/ContatosModule';
@@ -533,6 +535,7 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
   const moduleTitles: Record<ModuleType, string> = {
     dashboard: 'Visão Geral & Métricas',
     atendimento: 'Central de Atendimento Omnichannel',
+    whatsapp: 'Atendimento · WhatsApp',
     protocolos: 'Protocolos & Demandas',
     flow: 'Parlamenta Flow (Workflow)',
     agenda: 'Agenda & Minhas Tarefas',
@@ -555,6 +558,20 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
     clipping: 'Comunicação · Clipping',
     bd_importar: 'Banco de Dados · Importação',
   };
+
+  // WhatsApp: conversas não lidas no menu (o módulo atualiza mais rápido enquanto aberto).
+  const [whatsappUnread, setWhatsappUnread] = useState(0);
+  const [protocolPrefill, setProtocolPrefill] = useState<ProtocolPrefill | undefined>(undefined);
+  useEffect(() => {
+    const load = () =>
+      wa
+        .status()
+        .then((s) => setWhatsappUnread(s.unread))
+        .catch(() => undefined);
+    load();
+    const t = window.setInterval(load, 60_000);
+    return () => window.clearInterval(t);
+  }, []);
 
   // Badges calculation
   const unreadMessagesCount = conversations.reduce(
@@ -586,6 +603,7 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
         customLogoUrl={customLogoUrl}
         badgeCounts={{
           atendimento: unreadMessagesCount,
+          whatsapp: whatsappUnread,
           protocolosAtrasados: overdueProtocolsCount,
           flowAlertas: flowAlertsCount,
         }}
@@ -745,7 +763,17 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
             />
           )}
 
-          {currentModule === 'integracoes' && <IntegracoesModule />}
+          {currentModule === 'whatsapp' && (
+            <WhatsAppModule
+              onUnreadChange={setWhatsappUnread}
+              onOpenProtocol={(prefill) => {
+                setProtocolPrefill(prefill);
+                setNewProtocolModalOpen(true);
+              }}
+            />
+          )}
+
+          {currentModule === 'integracoes' && <IntegracoesModule onOpenWhatsApp={() => setCurrentModule('whatsapp')} />}
 
           {currentModule === 'relatorios' && <RelatoriosModule />}
 
@@ -794,7 +822,11 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
 
       <NovoProtocoloModal
         isOpen={newProtocolModalOpen}
-        onClose={() => setNewProtocolModalOpen(false)}
+        onClose={() => {
+          setNewProtocolModalOpen(false);
+          setProtocolPrefill(undefined);
+        }}
+        initial={protocolPrefill}
         onCreateProtocol={handleCreateProtocol}
         canManageLists={canManageDb}
         onManageList={(tab) => {

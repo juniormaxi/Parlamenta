@@ -396,6 +396,38 @@ const SCHEMA = `
   );
   CREATE INDEX IF NOT EXISTS idx_email_outbox_pending ON email_outbox(status, next_try_at);
 
+  -- ===== WhatsApp (wacli) — uma conta conectada por gabinete =====
+  -- status: disconnected | pairing | connected. A sessão em si fica em DATA_DIR/whatsapp/<tenant_id>.
+  CREATE TABLE IF NOT EXISTS whatsapp_accounts (
+    tenant_id      TEXT PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
+    status         TEXT NOT NULL DEFAULT 'disconnected',
+    jid            TEXT NOT NULL DEFAULT '',
+    connected_at   TEXT,
+    last_error     TEXT,
+    alerts_enabled INTEGER NOT NULL DEFAULT 1,
+    updated_at     TEXT NOT NULL DEFAULT datetime('now')
+  );
+
+  -- Fila de mensagens automáticas (alertas de protocolo). status: pending | sent | failed | uncertain
+  -- "uncertain": o envio caiu no meio e o WhatsApp pode ter entregue — nunca é reenviado sozinho.
+  CREATE TABLE IF NOT EXISTS whatsapp_outbox (
+    id           TEXT PRIMARY KEY,
+    tenant_id    TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    to_phone     TEXT NOT NULL,
+    body         TEXT NOT NULL,
+    kind         TEXT NOT NULL DEFAULT '',
+    ref          TEXT,
+    status       TEXT NOT NULL DEFAULT 'pending',
+    attempts     INTEGER NOT NULL DEFAULT 0,
+    next_try_at  TEXT NOT NULL DEFAULT datetime('now'),
+    last_error   TEXT,
+    message_id   TEXT,
+    created_at   TEXT NOT NULL DEFAULT datetime('now'),
+    sent_at      TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_whatsapp_outbox_pending ON whatsapp_outbox(status, next_try_at);
+  CREATE INDEX IF NOT EXISTS idx_whatsapp_outbox_tenant ON whatsapp_outbox(tenant_id, created_at);
+
   -- ===== Comunicação: Clipping =====
   CREATE TABLE IF NOT EXISTS clipping_topics (
     id            TEXT PRIMARY KEY,

@@ -14,19 +14,32 @@ import {
   Database,
 } from 'lucide-react';
 import { useDialog } from '../common/Dialogs';
+import { useWhatsAppStatus } from './whatsapp/WhatsAppConnection';
+import { formatPhone } from '../../lib/whatsapp';
 
-export const IntegracoesModule: React.FC = () => {
+export const IntegracoesModule: React.FC<{ onOpenWhatsApp?: () => void }> = ({ onOpenWhatsApp }) => {
   const dialog = useDialog();
+  const { status: waStatus } = useWhatsAppStatus(30_000);
+  const waLabel = !waStatus
+    ? 'Verificando…'
+    : !waStatus.installed
+      ? 'wacli não instalado'
+      : waStatus.status === 'connected'
+        ? `Conectado · ${formatPhone(waStatus.phone)}`
+        : waStatus.status === 'pairing'
+          ? 'Aguardando pareamento'
+          : 'Desconectado';
+  const waOk = waStatus?.status === 'connected';
   const integrations = [
     {
       id: 'whatsapp',
-      name: 'WhatsApp Business API',
+      name: 'WhatsApp do Gabinete',
       category: 'Atendimento Omnichannel',
-      status: 'sandbox',
-      description: 'Canal oficial para recebimento de demandas da população e envio automático de devolutivas auditadas.',
-      specs: 'Meta Cloud API v19.0 · Webhooks HTTPS com HMAC SHA256.',
+      status: waOk ? 'ativo' : 'pendente',
+      description: 'Número oficial do gabinete conectado como aparelho (QR code): conversas com cidadãos, geração de protocolos e avisos automáticos de andamento.',
+      specs: `wacli ${waStatus?.version?.replace(/^wacli\s*/, '') ?? ''} · sessão própria por gabinete · alertas com fila e reenvio.`,
       icon: MessageSquare,
-      statusLabel: 'Modo Sandbox Demonstrativo',
+      statusLabel: waLabel,
     },
     {
       id: 'instagram',
@@ -107,7 +120,11 @@ export const IntegracoesModule: React.FC = () => {
                     </div>
                   </div>
 
-                  <span className="text-[10px] font-mono px-2 py-0.5 rounded font-semibold bg-amber-50 text-amber-800 border border-amber-200">
+                  <span
+                    className={`text-[10px] font-mono px-2 py-0.5 rounded font-semibold border ${
+                      item.status === 'ativo' ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : 'bg-amber-50 text-amber-800 border-amber-200'
+                    }`}
+                  >
                     {item.statusLabel}
                   </span>
                 </div>
@@ -123,16 +140,22 @@ export const IntegracoesModule: React.FC = () => {
 
               <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs">
                 <span className="text-slate-400 text-[11px]">
-                  Autenticação segura via Token / OAuth
+                  {item.id === 'whatsapp' ? 'Pareamento por QR code · sem token da Meta' : 'Autenticação segura via Token / OAuth'}
                 </span>
-                <button
-                  onClick={() =>
-                    dialog.alert({ title: `Credenciais · ${item.name}`, message: `Configurações de credenciais para ${item.name} (Modo Sandbox ativo).` })
-                  }
-                  className="text-xs text-[#176B80] hover:underline font-semibold"
-                >
-                  Configurar Sandbox
-                </button>
+                {item.id === 'whatsapp' ? (
+                  <button onClick={onOpenWhatsApp} className="text-xs text-[#176B80] hover:underline font-semibold">
+                    {waOk ? 'Abrir conversas' : 'Conectar número'}
+                  </button>
+                ) : (
+                  <button
+                    onClick={() =>
+                      dialog.alert({ title: `Credenciais · ${item.name}`, message: `Configurações de credenciais para ${item.name} (Modo Sandbox ativo).` })
+                    }
+                    className="text-xs text-[#176B80] hover:underline font-semibold"
+                  >
+                    Configurar Sandbox
+                  </button>
+                )}
               </div>
             </div>
           );

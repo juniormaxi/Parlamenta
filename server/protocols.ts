@@ -14,6 +14,7 @@ import { db, tx, audit } from './db';
 import { HttpError, bad } from './http';
 import { ensureDemandThemes } from './taxonomy';
 import { queueEmail, kickEmailWorker, layout, esc, appUrl } from './mailer';
+import { queueWhatsApp, kickWhatsAppWorker } from './whatsapp';
 
 export const WEB_TAG = 'Demanda Web';
 export const WEB_CHANNEL_LABEL = 'Site do Parlamentar';
@@ -70,17 +71,20 @@ async function insertProtocol(tenantId: string, source: 'interno' | 'web', data:
 }
 
 // ---------------------------------------------------------------------------
-// Alertas por e-mail ao cidadão (Resend) — enfileirados na mesma transação do evento.
+// Alertas ao cidadão por e-mail (Resend) e WhatsApp (wacli) — enfileirados na mesma transação do evento.
 // ---------------------------------------------------------------------------
 type Notice = { kind: 'opened' } | { kind: 'status'; status: string } | { kind: 'response'; status: string; text: string };
 
 async function notifyCitizen(tenantId: string, protocol: { number: string; data: Record<string, any> }, n: Notice) {
   const to = text(protocol.data.citizenEmail, 200);
-  if (!to) return;
+  const phone = text(protocol.data.citizenPhone, 30);
+  if (!to && !phone) return;
   const t = await db.prepare(`SELECT slug, name, parliamentarian FROM tenants WHERE id = ?`).get(tenantId) as any;
   if (!t) return;
   const cabinet = t.parliamentarian || t.name;
   const url = `${appUrl()}/site/${t.slug}?protocolo=${encodeURIComponent(protocol.number)}`;
+  if (phone) await queueWhatsApp({ tenantId, phone, body: whatsappText(cabinet, url, protocol, n), kind: `protocol.${n.kind}`, ref: protocol.number });
+  if (!to) return;
   const first = esc(String(protocol.data.citizenName ?? '').split(' ')[0] || 'cidadão(ã)');
   const num = `<strong style="font-family:monospace">${esc(protocol.number)}</strong>`;
   const summary = `<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;font-size:13px;border:1px solid #e2e8f0;border-radius:8px;background:#f8fafc">
@@ -116,6 +120,20 @@ async function notifyCitizen(tenantId: string, protocol: { number: string; data:
     kind: `protocol.${n.kind}`,
     ref: protocol.number,
   });
+}
+
+/** Texto do alerta no WhatsApp (*negrito* do WhatsApp; sem HTML). */
+function whatsappText(cabinet: string, url: string, protocol: { number: string; data: Record<string, any> }, n: Notice) {
+  const first = String(protocol.data.citizenName ?? '').trim().split(' ')[0] || 'cidadão(ã)';
+  const head = `*${cabinet}* — Atendimento ao Cidadão`;
+  const foot = `Acompanhe: ${url}\n(use o nº do protocolo e os 4 últimos dígitos do seu telefone)`;
+  if (n.kind === 'opened') {
+    return `${head}\n\nOlá, ${first}! Sua demanda foi registrada com o protocolo *${protocol.number}*.\nAssunto: ${text(protocol.data.subject, 200)}\n\nAvisaremos por aqui a cada atualização.\n\n${foot}`;
+  }
+  if (n.kind === 'status') {
+    return `${head}\n\nOlá, ${first}! O protocolo *${protocol.number}* mudou para: *${STATUS_LABEL[n.status]}*.\n\n${foot}`;
+  }
+  return `${head}\n\nOlá, ${first}! Resposta do gabinete para o protocolo *${protocol.number}*:\n\n${n.text}\n\nSituação: *${STATUS_LABEL[n.status]}*\n\n${foot}`;
 }
 
 async function eventsFor(protocolId: string, who: 'team' | 'citizen') {
@@ -191,6 +209,7 @@ tenantProtocolsRouter.post('/', async (req, res) => {
     return p;
   });
   kickEmailWorker();
+  kickWhatsAppWorker();
   await audit({ ...actor(req), action: 'protocol.created', target: created.number });
   res.status(201).json(await toClient(await db.prepare(`SELECT * FROM protocols WHERE id = ?`).get(created.id)));
 });
@@ -232,6 +251,7 @@ tenantProtocolsRouter.patch('/:id', async (req, res) => {
     else if (status !== cur.status) await notifyCitizen(tid(req), p, { kind: 'status', status });
   });
   kickEmailWorker();
+  kickWhatsAppWorker();
   if (status !== cur.status) await audit({ ...actor(req), action: 'protocol.status_changed', target: cur.number, details: { from: cur.status, to: status } });
   res.json(await toClient(await db.prepare(`SELECT * FROM protocols WHERE id = ?`).get(cur.id)));
 });
@@ -323,10 +343,11 @@ publicRouter.post('/sites/:slug/protocols', async (req, res) => {
         visibility: 'both',
       }
     );
-    await notifyCitizen(t.id, { number: p.number, data: { citizenName: name, citizenEmail: email, subject } }, { kind: 'opened' });
+    await notifyCitizen(t.id, { number: p.number, data: { citizenName: name, citizenEmail: email, citizenPhone: phone, subject } }, { kind: 'opened' });
     return p;
   });
   kickEmailWorker();
+  kickWhatsAppWorker();
   await audit({ tenantId: t.id, action: 'protocol.created_web', target: created.number, ip: req.ip });
   res.status(201).json({ number: created.number });
 });

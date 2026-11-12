@@ -25,6 +25,8 @@ interface NovoProtocoloModalProps {
   }) => void;
   canManageLists?: boolean;
   onManageList?: (tab: 'canais' | 'temas') => void;
+  /** Pré-preenchimento (ex.: protocolo gerado a partir de uma conversa do WhatsApp). */
+  initial?: Partial<{ citizenName: string; citizenPhone: string; subject: string; description: string; channelName: string }>;
 }
 
 export const NovoProtocoloModal: React.FC<NovoProtocoloModalProps> = ({
@@ -33,6 +35,7 @@ export const NovoProtocoloModal: React.FC<NovoProtocoloModalProps> = ({
   onCreateProtocol,
   canManageLists = false,
   onManageList,
+  initial,
 }) => {
   const dialog = useDialog();
   const emptyForm = {
@@ -55,13 +58,18 @@ export const NovoProtocoloModal: React.FC<NovoProtocoloModalProps> = ({
     if (!isOpen) return;
     let alive = true;
     setLists(null);
+    if (initial) setForm({ ...emptyForm, ...initial });
     api<Taxonomy>('/tenant/db/taxonomy')
       .then((tx) => {
         if (!alive) return;
         setLists({ channels: tx.entryChannels, themes: tx.demandThemes });
         setForm((f) => ({
           ...f,
-          channelName: tx.entryChannels.some((c) => c.name === f.channelName) ? f.channelName : (tx.entryChannels[0]?.name ?? ''),
+          channelName: tx.entryChannels.some((c) => c.name === f.channelName)
+            ? f.channelName
+            : (tx.entryChannels.find((c) => f.channelName && c.name.toLowerCase().includes(f.channelName.toLowerCase()))?.name ??
+              tx.entryChannels[0]?.name ??
+              ''),
           theme: tx.demandThemes.some((t) => t.name === f.theme) ? f.theme : (tx.demandThemes[0]?.name ?? ''),
         }));
       })
@@ -73,6 +81,7 @@ export const NovoProtocoloModal: React.FC<NovoProtocoloModalProps> = ({
     return () => {
       alive = false;
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, dialog]);
 
   if (!isOpen) return null;

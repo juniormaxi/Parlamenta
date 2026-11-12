@@ -66,7 +66,7 @@ function readBody(req: Request, limit: number): Promise<Buffer> {
 }
 
 /** Streams a (possibly large) raw request body to disk with a size limit. */
-function streamToFile(req: Request, dest: string, limit: number): Promise<number> {
+export function streamToFile(req: Request, dest: string, limit: number): Promise<number> {
   return new Promise((resolve, reject) => {
     fs.mkdirSync(path.dirname(dest), { recursive: true });
     const out = fs.createWriteStream(dest, { flags: 'wx', mode: 0o600 });
@@ -92,7 +92,7 @@ function streamToFile(req: Request, dest: string, limit: number): Promise<number
   });
 }
 
-const fileNameHeader = (req: Request) => {
+export const fileNameHeader = (req: Request) => {
   try {
     return path.basename(decodeURIComponent(String(req.headers['x-file-name'] ?? ''))).slice(0, 200);
   } catch {
