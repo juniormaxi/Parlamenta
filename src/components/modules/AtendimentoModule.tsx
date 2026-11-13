@@ -201,7 +201,7 @@ export const AtendimentoModule: React.FC<AtendimentoModuleProps> = ({
       case 'telefone':
         return <span className="text-amber-700 font-semibold text-[11px]">Telefone</span>;
       case 'presencial':
-        return <span className="text-[#102C45] font-semibold text-[11px]">Presencial ALMT</span>;
+        return <span className="text-[#102C45] font-semibold text-[11px]">Presencial</span>;
       case 'web':
         return <span className="text-violet-700 font-semibold text-[11px]">Site</span>;
     }

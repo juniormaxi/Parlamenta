@@ -561,6 +561,10 @@ const SCHEMA = `
   );
   CREATE INDEX IF NOT EXISTS idx_crm_campaigns_tenant ON crm_campaigns(tenant_id);
 
+  -- Casa legislativa do gabinete: município (esfera municipal) e nº de cadeiras do plenário (0 = padrão da esfera).
+  ALTER TABLE tenants ADD COLUMN IF NOT EXISTS city  TEXT NOT NULL DEFAULT '';
+  ALTER TABLE tenants ADD COLUMN IF NOT EXISTS seats INTEGER NOT NULL DEFAULT 0;
+
   -- Legislativo › Ofícios (dados do ofício em JSON; colunas para busca/ordenação).
   CREATE TABLE IF NOT EXISTS official_letters (
     id          TEXT PRIMARY KEY,

@@ -15,6 +15,7 @@ import { crmRouter } from './crm';
 import { blocklistRouter } from './blocklist';
 import { oficiosRouter } from './oficios';
 import { knowledgeRouter } from './knowledge';
+import { ufInfo, seatLimits, defaultHouse, type Sphere } from '../src/lib/chamber';
 import { db, tx, migrate, audit, tenantStorageBytes, dbFileBytes } from './db';
 import {
   TENANT_ROLES,
@@ -82,6 +83,24 @@ function str(v: unknown, field: string, { min = 1, max = 200 } = {}): string {
 function optStr(v: unknown, field: string, max = 200): string | undefined {
   return v === undefined ? undefined : str(v, field, { min: 0, max });
 }
+/** Valida UF, município e nº de cadeiras conforme a esfera; completa o nome da casa se vier vazio. */
+function chamberFields(sphere: Sphere, b: any, current?: any) {
+  const state = (optStr(b.state, 'state', 2) ?? current?.state ?? '').toUpperCase();
+  if (!ufInfo(state)) throw bad('Informe a UF (sigla de 2 letras).');
+  const city = sphere === 'municipal' ? (optStr(b.city, 'city', 120) ?? current?.city ?? '') : '';
+  if (sphere === 'municipal' && !city) throw bad('Informe o município da Câmara Municipal.');
+  let seats = b.seats === undefined || b.seats === '' || b.seats === null ? (current?.seats ?? 0) : Number(b.seats);
+  if (!Number.isInteger(seats) || seats < 0) throw bad('Número de cadeiras inválido.');
+  if (seats) {
+    const lim = seatLimits(sphere, state);
+    if (seats < lim.min || seats > lim.max) throw bad(`Número de cadeiras deve ficar entre ${lim.min} e ${lim.max} nesta esfera.`);
+  }
+  if (sphere === 'municipal' && !seats) throw bad('Informe o número de vereadores da Câmara Municipal.');
+  const houseIn = optStr(b.house, 'house');
+  const house = houseIn !== undefined ? houseIn || defaultHouse(sphere, state, city) : (current?.house || defaultHouse(sphere, state, city));
+  return { state, city, seats, house };
+}
+
 function int(v: unknown, field: string, min: number, max: number): number {
   const n = Number(v);
   if (!Number.isInteger(n) || n < min || n > max) throw bad(`Campo "${field}" deve ser inteiro entre ${min} e ${max}.`);
@@ -129,6 +148,8 @@ const publicTenant = (t: any) => ({
   sphere: t.sphere,
   house: t.house,
   state: t.state,
+  city: t.city ?? '',
+  seats: t.seats ?? 0,
   status: t.status,
   storageQuotaMb: t.storage_quota_mb,
   maxUsers: t.max_users,
@@ -307,20 +328,23 @@ api.post('/admin/tenants', requireSuperAdmin, async (req, res) => {
   const adminRole = b.admin?.role === undefined ? 'chefe_gabinete' : oneOf(b.admin.role, 'admin.role', TENANT_ADMIN_ROLES);
   if (await emailTaken(adminEmail)) throw new HttpError(409, 'E-mail do administrador já está em uso.');
 
+  const chamber = chamberFields(sphere, b);
   const tenantId = crypto.randomUUID();
   const userId = crypto.randomUUID();
   await tx(async () => {
     await db.prepare(
-      `INSERT INTO tenants (id, slug, name, parliamentarian, sphere, house, state, storage_quota_mb, max_users)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO tenants (id, slug, name, parliamentarian, sphere, house, state, city, seats, storage_quota_mb, max_users)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       tenantId,
       slug,
       name,
       optStr(b.parliamentarian, 'parliamentarian') ?? '',
       sphere,
-      optStr(b.house, 'house') ?? '',
-      (optStr(b.state, 'state', 2) ?? '').toUpperCase(),
+      chamber.house,
+      chamber.state,
+      chamber.city,
+      chamber.seats,
       quota,
       maxUsers
     );
@@ -341,15 +365,16 @@ api.patch('/admin/tenants/:id', requireSuperAdmin, async (req, res) => {
     name: b.name === undefined ? t.name : str(b.name, 'name'),
     parliamentarian: optStr(b.parliamentarian, 'parliamentarian') ?? t.parliamentarian,
     sphere: b.sphere === undefined ? t.sphere : oneOf(b.sphere, 'sphere', ['estadual', 'federal', 'municipal'] as const),
-    house: optStr(b.house, 'house') ?? t.house,
-    state: (optStr(b.state, 'state', 2) ?? t.state).toUpperCase(),
     status: b.status === undefined ? t.status : oneOf(b.status, 'status', ['active', 'suspended'] as const),
     storage_quota_mb: b.storageQuotaMb === undefined ? t.storage_quota_mb : int(b.storageQuotaMb, 'storageQuotaMb', 1, 1_048_576),
     max_users: b.maxUsers === undefined ? t.max_users : int(b.maxUsers, 'maxUsers', 1, 10_000),
   };
+  // Trocar de esfera zera o nº de cadeiras e o nome da casa, salvo se vierem no pedido.
+  const sphereChanged = patch.sphere !== t.sphere;
+  const chamber = chamberFields(patch.sphere, b, sphereChanged ? { state: t.state, city: t.city, seats: 0, house: '' } : t);
   await db.prepare(
-    `UPDATE tenants SET name=?, parliamentarian=?, sphere=?, house=?, state=?, status=?, storage_quota_mb=?, max_users=? WHERE id=?`
-  ).run(patch.name, patch.parliamentarian, patch.sphere, patch.house, patch.state, patch.status, patch.storage_quota_mb, patch.max_users, t.id);
+    `UPDATE tenants SET name=?, parliamentarian=?, sphere=?, house=?, state=?, city=?, seats=?, status=?, storage_quota_mb=?, max_users=? WHERE id=?`
+  ).run(patch.name, patch.parliamentarian, patch.sphere, chamber.house, chamber.state, chamber.city, chamber.seats, patch.status, patch.storage_quota_mb, patch.max_users, t.id);
   if (patch.status === 'suspended' && t.status !== 'suspended') await revokeTenantSessions(t.id);
   await audit({ ...actor(req), tenantId: t.id, action: 'tenant.updated', target: t.slug, details: b });
   res.json(publicTenant(await db.prepare(`SELECT * FROM tenants WHERE id = ?`).get(t.id)));

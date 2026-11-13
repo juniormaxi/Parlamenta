@@ -38,8 +38,11 @@ import {
 } from '../../../types';
 import { useDialog } from '../../common/Dialogs';
 import { HemicycleChart, type HemicycleGroup } from './HemicycleChart';
+import { UFS, type ChamberConfig } from '../../../lib/chamber';
 
 interface ParlamentoHemicicloModuleProps {
+  /** Casa legislativa do gabinete (esfera, nº de cadeiras, quóruns, nomenclatura). */
+  chamber: ChamberConfig;
   parliamentarians: Parliamentarian[];
   votingSessions: VotingSession[];
   onAddParliamentarian: (p: Parliamentarian) => void;
@@ -58,7 +61,37 @@ const BAD = '#d64545';
 const BAD_LIGHT = '#eb9a9a';
 const NEUTRAL_GRAY = '#a8a6a0';
 
+const VACANT_PREFIX = 'vaga-';
+const isVacant = (p: Parliamentarian) => p.id.startsWith(VACANT_PREFIX);
+
+/** Resultado da votação conforme o quórum, sobre o total de cadeiras da casa. */
+export function voteOutcome(votes: Record<string, VoteChoice>, quorumType: VotingSession['quorumType'], chamber: ChamberConfig) {
+  const vals = Object.values(votes);
+  const sim = vals.filter((v) => v === 'sim').length;
+  const nao = vals.filter((v) => v === 'nao').length;
+  const abst = vals.filter((v) => v === 'abstencao').length;
+  const present = sim + nao + abst;
+  const { absoluta, tresQuintos, doisTercos } = chamber.quorum;
+  let approved: boolean;
+  let rule: string;
+  if (quorumType === 'Maioria Absoluta') {
+    approved = sim >= absoluta;
+    rule = `${absoluta} votos SIM (maioria absoluta de ${chamber.seats})`;
+  } else if (quorumType === 'Três Quintos (3/5)') {
+    approved = sim >= tresQuintos;
+    rule = `${tresQuintos} votos SIM (3/5 de ${chamber.seats})`;
+  } else if (quorumType === 'Dois Terços (2/3)') {
+    approved = sim >= doisTercos;
+    rule = `${doisTercos} votos SIM (2/3 de ${chamber.seats})`;
+  } else {
+    approved = present >= absoluta && sim > nao;
+    rule = `mais SIM que NÃO, com presença mínima de ${absoluta}`;
+  }
+  return { sim, nao, abst, present, approved, rule };
+}
+
 export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps> = ({
+  chamber,
   parliamentarians,
   votingSessions,
   onAddParliamentarian,
@@ -71,11 +104,27 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
   const [filterBloc, setFilterBloc] = useState<string>('todos');
   const [filterParty, setFilterParty] = useState<string>('todos');
   const [searchDeputy, setSearchDeputy] = useState<string>('');
+  const [filterUf, setFilterUf] = useState<string>('todos');
+  const registered = parliamentarians.length;
+  const vacantCount = Math.max(0, chamber.seats - registered);
+  const seatTaken = (seat: number, exceptId?: string) => parliamentarians.find((p) => p.seatNumber === seat && p.id !== exceptId);
+  /** Valida a cadeira informada no cadastro/edição. Retorna mensagem de erro ou null. */
+  const seatError = (seat: number, exceptId?: string) => {
+    if (!Number.isInteger(seat) || seat < 1 || seat > chamber.seats) return `A cadeira deve ficar entre 1 e ${chamber.seats} (${chamber.houseShort}).`;
+    const other = seatTaken(seat, exceptId);
+    return other ? `A cadeira ${seat} já está ocupada por ${other.popularName}.` : null;
+  };
+  const firstFreeSeat = () => {
+    for (let i = 1; i <= chamber.seats; i++) if (!seatTaken(i)) return i;
+    return chamber.seats;
+  };
   const [chamberViewMode, setChamberViewMode] = useState<ChamberViewMode>('partidos');
 
   // Modals state
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [newDeputyModalOpen, setNewDeputyModalOpen] = useState(false);
+  /** Cadeira sugerida ao cadastrar (clique numa cadeira vazia do plenário). */
+  const [newSeatDefault, setNewSeatDefault] = useState<number | null>(null);
   const [newVoteModalOpen, setNewVoteModalOpen] = useState(false);
   const [inspectVoteSession, setInspectVoteSession] = useState<VotingSession | null>(votingSessions[0] || null);
 
@@ -115,14 +164,16 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
     return parliamentarians.filter((dep) => {
       const matchBloc = filterBloc === 'todos' || dep.bloc === filterBloc;
       const matchParty = filterParty === 'todos' || dep.party === filterParty;
+      const matchUf = filterUf === 'todos' || dep.uf === filterUf;
       const matchSearch =
         dep.name.toLowerCase().includes(searchDeputy.toLowerCase()) ||
         dep.popularName.toLowerCase().includes(searchDeputy.toLowerCase()) ||
         dep.electoralBase.toLowerCase().includes(searchDeputy.toLowerCase()) ||
         dep.party.toLowerCase().includes(searchDeputy.toLowerCase());
-      return matchBloc && matchParty && matchSearch;
+      return matchBloc && matchParty && matchUf && matchSearch;
     });
-  }, [parliamentarians, filterBloc, filterParty, searchDeputy]);
+  }, [parliamentarians, filterBloc, filterParty, filterUf, searchDeputy]);
+  const ufsInChamber = useMemo(() => Array.from(new Set(parliamentarians.map((p) => p.uf).filter(Boolean) as string[])).sort(), [parliamentarians]);
 
   // Party order + display colors, shared by the diagram, the profile card and the cohesion ranking.
   // Max 8 distinguishable hues: with more than 8 parties the 7 largest get their own color, the rest fold into "Outros".
@@ -219,8 +270,9 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
       return;
     }
 
-    const simCount = Object.values(newVoteForm.votes).filter((v) => v === 'sim').length;
-    const isApproved = simCount >= 13;
+    const outcome = voteOutcome(newVoteForm.votes, newVoteForm.quorumType, chamber);
+    const simCount = outcome.sim;
+    const isApproved = outcome.approved;
 
     const newSession: VotingSession = {
       id: `vot-${Date.now()}`,
@@ -233,7 +285,7 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
       mandateVote: newVoteForm.mandateVote,
       result: isApproved ? 'Aprovado' : 'Rejeitado',
       votes: newVoteForm.votes,
-      summary: `Votação concluída com ${simCount} votos favoráveis. Matéria ${isApproved ? 'aprovada' : 'rejeitada'}.`,
+      summary: `Votação concluída com ${simCount} votos favoráveis, ${outcome.nao} contrários e ${outcome.abst} abstenções (${newVoteForm.quorumType}: ${outcome.rule}). Matéria ${isApproved ? 'aprovada' : 'rejeitada'}.`,
       strategicNote: newVoteForm.strategicNote || 'Registro nominal efetuado pelo Gabinete Conectado.',
     };
 
@@ -299,7 +351,36 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
 
   // ---- Hemicycle groups per view mode (colors validated with the dataviz palette checker) ----
   const filteredIds = useMemo(() => new Set(filteredDeputies.map((d) => d.id)), [filteredDeputies]);
+  const vacantGroup = useMemo((): HemicycleGroup | null => {
+    if (!vacantCount) return null;
+    const members: Parliamentarian[] = [];
+    let seat = 1;
+    for (let i = 0; i < vacantCount; i++) {
+      while (seatTaken(seat)) seat++;
+      members.push({
+        id: `${VACANT_PREFIX}${seat}`,
+        name: `Cadeira ${seat} sem parlamentar cadastrado`,
+        popularName: `Cadeira ${seat} · não cadastrada`,
+        party: '—',
+        partyColor: NEUTRAL_GRAY,
+        bloc: 'Independente',
+        seatNumber: seat,
+        electoralBase: '',
+        alignmentScore: 0,
+      });
+      seat++;
+    }
+    return { key: '__vagas', label: 'Cadeiras não cadastradas', color: '#cbd5e1', hollow: true, members, note: 'Cadastre o parlamentar' };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vacantCount, parliamentarians]);
+
   const chamberGroups = useMemo((): { heading: string; note?: string; groups: HemicycleGroup[] } => {
+    const r = chamberGroupsBase();
+    return vacantGroup ? { ...r, groups: [...r.groups, vacantGroup] } : r;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chamberViewMode, parliamentarians, inspectVoteSession, partyLayout, vacantGroup]);
+
+  function chamberGroupsBase(): { heading: string; note?: string; groups: HemicycleGroup[] } {
     const bySeat = (a: Parliamentarian, b: Parliamentarian) => a.seatNumber - b.seatNumber;
     if (chamberViewMode === 'partidos') {
       const { main, rest } = partyLayout;
@@ -369,7 +450,7 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
         members: parliamentarians.filter((p) => vote(p) === key).sort(bySeat),
       })),
     };
-  }, [chamberViewMode, parliamentarians, inspectVoteSession, partyLayout]);
+  }
 
   return (
     <div className="space-y-4">
@@ -385,11 +466,11 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
               <h1 className="text-lg font-bold text-slate-900 tracking-tight flex items-center gap-2">
                 Composição do Plenário & Inteligência de Bancadas
                 <span className="text-[11px] font-mono px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold">
-                  {parliamentarians.length} Cadeiras Titulares
+                  {chamber.seats} cadeiras
                 </span>
               </h1>
               <p className="text-xs text-slate-500">
-                Ocupação das cadeiras por bancada, monitoramento nominal de votações e cálculo de fidelidade por tema
+                {chamber.house} · {chamber.seats} {chamber.memberPlural} · ocupação por bancada, votações nominais e fidelidade por tema
               </p>
             </div>
           </div>
@@ -443,7 +524,10 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
           </button>
 
           <button
-            onClick={() => setNewDeputyModalOpen(true)}
+            onClick={() => {
+              setNewSeatDefault(null);
+              setNewDeputyModalOpen(true);
+            }}
             className="px-3 py-1.5 text-xs font-medium text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-lg transition-colors flex items-center gap-1.5 shadow-xs"
           >
             <Users className="w-3.5 h-3.5 text-slate-500" />
@@ -464,18 +548,23 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
               <div className="px-5 pt-4 pb-3 border-b border-slate-100 flex flex-col gap-3">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div>
-                    <h2 className="text-sm font-bold text-slate-900">Composição do Plenário · ALMT</h2>
+                    <h2 className="text-sm font-bold text-slate-900">Composição do Plenário · {chamber.houseShort}</h2>
                     <p className="text-[11px] text-slate-500">
-                      Assembleia Legislativa do Estado de Mato Grosso · 20ª Legislatura · {parliamentarians.length} cadeiras
+                      {chamber.house} · {chamber.seats} cadeiras · {registered} {registered === 1 ? 'parlamentar cadastrado' : 'parlamentares cadastrados'}
+                      {vacantCount > 0 && <span className="text-amber-700"> · {vacantCount} a cadastrar</span>}
                     </p>
                   </div>
                   <div className="flex items-center gap-2 font-mono text-[11px] text-slate-600 bg-slate-50 border border-slate-200 px-2.5 py-1 rounded-lg">
-                    <span>
-                      Maioria simples <strong className="text-slate-900">{Math.floor(parliamentarians.length / 2) + 1}</strong>
+                    <span title="Maioria absoluta do total de cadeiras">
+                      Maioria absoluta <strong className="text-slate-900">{chamber.quorum.absoluta}</strong>
+                    </span>
+                    <span className="text-slate-300">|</span>
+                    <span title="Três quintos (ex.: emenda constitucional)">
+                      3/5 <strong className="text-slate-900">{chamber.quorum.tresQuintos}</strong>
                     </span>
                     <span className="text-slate-300">|</span>
                     <span>
-                      2/3 <strong className="text-slate-900">{Math.ceil((parliamentarians.length * 2) / 3)}</strong>
+                      2/3 <strong className="text-slate-900">{chamber.quorum.doisTercos}</strong>
                     </span>
                   </div>
                 </div>
@@ -515,8 +604,13 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
                   showNote={chamberGroups.note}
                   selectedId={selectedDeputy?.id}
                   mandateId="dep-01"
-                  isDimmed={(p) => !filteredIds.has(p.id)}
-                  onSelect={setSelectedDeputy}
+                  isDimmed={(p) => (isVacant(p) ? filterBloc !== 'todos' || filterParty !== 'todos' || filterUf !== 'todos' : !filteredIds.has(p.id))}
+                  onSelect={(p) => {
+                    if (isVacant(p)) {
+                      setNewSeatDefault(p.seatNumber);
+                      setNewDeputyModalOpen(true);
+                    } else setSelectedDeputy(p);
+                  }}
                 />
               </div>
 
@@ -545,10 +639,33 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
                       </option>
                     ))}
                   </select>
+                  {chamber.groupsByUf && (
+                    <select
+                      value={filterUf}
+                      onChange={(e) => setFilterUf(e.target.value)}
+                      className="px-2 py-1 bg-white border border-slate-200 rounded-md text-[11px] text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-[#176B80]"
+                      aria-label="Bancada estadual"
+                    >
+                      <option value="todos">Todas as bancadas (UF)</option>
+                      {ufsInChamber.map((uf) => (
+                        <option key={uf} value={uf}>
+                          Bancada {uf} ({parliamentarians.filter((p) => p.uf === uf).length})
+                        </option>
+                      ))}
+                    </select>
+                  )}
                 </div>
-                <span className="flex items-center gap-1.5 text-[11px]">
-                  <span className="w-3 h-3 rounded-full border-2 border-dashed border-[#36B7A5]" />
-                  Seu mandato · cadeira nº 1
+                <span className="flex items-center gap-3 text-[11px]">
+                  {vacantCount > 0 && (
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-3 h-3 rounded-full border-2 border-slate-300" />
+                      Clique numa cadeira vazia para cadastrar
+                    </span>
+                  )}
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-3 h-3 rounded-full border-2 border-dashed border-[#36B7A5]" />
+                    Seu mandato
+                  </span>
                 </span>
               </div>
             </div>
@@ -623,15 +740,15 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
                       Base Regional
                     </span>
                     <span className="font-semibold text-slate-800 mt-0.5 block truncate">
-                      {selectedDeputy.electoralBase}
+                      {[chamber.groupsByUf && selectedDeputy.uf ? selectedDeputy.uf : '', selectedDeputy.electoralBase].filter(Boolean).join(' · ') || '—'}
                     </span>
                   </div>
                   <div className="col-span-2 pt-2 border-t border-slate-200">
                     <span className="text-[10px] font-bold uppercase text-slate-400 block tracking-wider">
-                      Função na Assembleia
+                      Função na {chamber.sphere === 'municipal' ? 'Câmara' : chamber.sphere === 'federal' ? 'Câmara' : 'Assembleia'}
                     </span>
                     <span className="font-medium text-slate-700 mt-0.5 block">
-                      {selectedDeputy.role || 'Deputado Estadual Titular'}
+                      {selectedDeputy.role || `${chamber.memberTitle} titular`}
                     </span>
                   </div>
                 </div>
@@ -722,7 +839,11 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
             ) : (
               <div className="bg-white border border-slate-200 rounded-2xl p-8 text-center text-slate-400">
                 <HelpCircle className="w-8 h-8 mx-auto mb-2 opacity-50" />
-                <p className="text-xs">Selecione uma cadeira no plenário para inspecionar o parlamentar.</p>
+                <p className="text-xs">
+                  {registered === 0
+                    ? `Nenhum parlamentar cadastrado ainda. Clique numa cadeira do plenário ou em “Cadastrar Parlamentar” para montar a composição da ${chamber.houseShort}.`
+                    : 'Selecione uma cadeira no plenário para inspecionar o parlamentar.'}
+                </p>
               </div>
             )}
 
@@ -730,12 +851,12 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
             <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
               <div className="flex items-center justify-between mb-2">
                 <h4 className="text-xs font-bold text-slate-800">
-                  Deputados no Plenário ({filteredDeputies.length})
+                  Parlamentares cadastrados ({filteredDeputies.length}/{chamber.seats})
                 </h4>
                 <div className="relative">
                   <input
                     type="text"
-                    placeholder="Buscar deputado..."
+                    placeholder="Buscar parlamentar..."
                     value={searchDeputy}
                     onChange={(e) => setSearchDeputy(e.target.value)}
                     className="text-xs bg-slate-50 border border-slate-200 rounded-md px-2 py-1 pl-6 w-36 text-slate-800 focus:outline-none"
@@ -756,10 +877,11 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
                     }`}
                   >
                     <div className="flex items-center gap-2 overflow-hidden">
-                      <span className="font-mono text-[10px] w-5 text-slate-400 font-bold">
+                      <span className="font-mono text-[10px] w-7 text-slate-400 font-bold">
                         #{dep.seatNumber}
                       </span>
                       <span className="truncate">{dep.popularName}</span>
+                      {chamber.groupsByUf && dep.uf && <span className="text-[10px] text-slate-400">{dep.uf}</span>}
                     </div>
                     <span className="text-[10px] px-1.5 py-0.2 rounded font-mono font-bold bg-slate-100 text-slate-700">
                       {dep.party}
@@ -925,10 +1047,10 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
                   </div>
                 )}
 
-                {/* Detailed Roll Call Grid of 24 Deputies */}
+                {/* Detailed Roll Call Grid */}
                 <div>
                   <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider mb-2">
-                    Votação Nominal dos 24 Parlamentares
+                    Votação Nominal · {registered} parlamentares cadastrados de {chamber.seats}
                   </h4>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-80 overflow-y-auto pr-1">
                     {parliamentarians.map((dep) => {
@@ -1004,7 +1126,7 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
                 Matriz Estratégica de Tendência de Votos
               </h3>
               <p className="text-xs text-slate-500 mt-0.5">
-                Descubra como os deputados e partidos se posicionam por tema para antecipar quóruns e desenhar alianças
+                Descubra como os parlamentares e partidos se posicionam por tema para antecipar quóruns e desenhar alianças
               </p>
             </div>
 
@@ -1078,7 +1200,9 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
                   Alerta Tático do Gabinete:
                 </span>
                 <p className="text-amber-950/80 leading-relaxed">
-                  Para matérias de <strong>{selectedThemeStrategy}</strong>, a bancada do MDB (4 deputados) e o Bloco Independente são decisivos para atingir a maioria qualificada de 16 votos (2/3).
+                  Para matérias de <strong>{selectedThemeStrategy}</strong>, o Bloco Independente (
+                  {parliamentarians.filter((p) => p.bloc === 'Independente').length} cadeiras) é decisivo para atingir a maioria absoluta de{' '}
+                  {chamber.quorum.absoluta} votos e a maioria qualificada de {chamber.quorum.doisTercos} votos (2/3) na {chamber.houseShort}.
                 </p>
               </div>
             </div>
@@ -1089,7 +1213,7 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
                 <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
                   Ranking Individual de Alinhamento — {selectedThemeStrategy}
                 </h4>
-                <span className="text-xs text-slate-400 font-mono">24 parlamentares</span>
+                <span className="text-xs text-slate-400 font-mono">{registered} parlamentares</span>
               </div>
 
               <div className="max-h-[380px] overflow-y-auto divide-y divide-slate-100 text-xs">
@@ -1158,7 +1282,7 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
                 <div>
                   <h3 className="font-bold text-slate-900 text-base">Registrar Nova Votação Nominal em Plenário</h3>
                   <p className="text-xs text-slate-500">
-                    Cadastre o resultado da matéria e os votos individuais dos 24 parlamentares
+                    Cadastre o resultado da matéria e os votos individuais dos {registered} parlamentares cadastrados ({chamber.houseShort} · {chamber.seats} cadeiras)
                   </p>
                 </div>
               </div>
@@ -1222,9 +1346,10 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
                     }
                     className="w-full text-xs border border-slate-300 rounded-lg p-2"
                   >
-                    <option value="Maioria Simples">Maioria Simples (13 votos)</option>
-                    <option value="Maioria Absoluta">Maioria Absoluta (13 votos)</option>
-                    <option value="Dois Terços (2/3)">Dois Terços (16 votos)</option>
+                    <option value="Maioria Simples">Maioria Simples (maioria dos presentes · quórum {chamber.quorum.absoluta})</option>
+                    <option value="Maioria Absoluta">Maioria Absoluta ({chamber.quorum.absoluta} votos)</option>
+                    <option value="Três Quintos (3/5)">Três Quintos ({chamber.quorum.tresQuintos} votos)</option>
+                    <option value="Dois Terços (2/3)">Dois Terços ({chamber.quorum.doisTercos} votos)</option>
                   </select>
                 </div>
 
@@ -1277,7 +1402,7 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-                    Voto Nominal dos 24 Parlamentares:
+                    Voto Nominal ({registered} parlamentares):
                   </span>
                   <span className="text-xs font-mono font-bold text-slate-600">
                     SIM:{' '}
@@ -1413,8 +1538,15 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
               onSubmit={(e) => {
                 e.preventDefault();
                 const form = e.currentTarget;
+                const seat = parseInt((form.elements.namedItem('seatNumber') as HTMLInputElement).value, 10);
+                const err = seatError(seat);
+                if (err) {
+                  dialog.alert({ title: 'Cadeira inválida', message: err, tone: 'warning' });
+                  return;
+                }
                 const newDep: Parliamentarian = {
                   id: `dep-${Date.now()}`,
+                  uf: chamber.groupsByUf ? (form.elements.namedItem('uf') as HTMLSelectElement).value : undefined,
                   name: (form.elements.namedItem('fullName') as HTMLInputElement).value,
                   popularName: (form.elements.namedItem('popularName') as HTMLInputElement).value,
                   party: (form.elements.namedItem('party') as HTMLInputElement).value,
@@ -1448,7 +1580,7 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
                   <input
                     name="popularName"
                     required
-                    placeholder="Ex: Dep. Carlos Oliveira"
+                    placeholder={chamber.sphere === 'municipal' ? 'Ex: Ver. Carlos Oliveira' : 'Ex: Dep. Carlos Oliveira'}
                     className="w-full border border-slate-300 rounded-lg p-2"
                   />
                 </div>
@@ -1473,25 +1605,39 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
                   </select>
                 </div>
                 <div>
-                  <label className="font-semibold text-slate-700 block mb-1">Cadeira no Plenário (1 a 24)</label>
+                  <label className="font-semibold text-slate-700 block mb-1">Cadeira no Plenário (1 a {chamber.seats})</label>
                   <input
                     name="seatNumber"
                     type="number"
                     min="1"
-                    max="24"
-                    defaultValue="1"
+                    max={chamber.seats}
+                    defaultValue={newSeatDefault ?? firstFreeSeat()}
                     className="w-full border border-slate-300 rounded-lg p-2 font-mono"
                   />
                 </div>
               </div>
 
-              <div>
-                <label className="font-semibold text-slate-700 block mb-1">Base Eleitoral Principal</label>
-                <input
-                  name="base"
-                  placeholder="Ex: Sinop, Rondonópolis, Cuiabá"
-                  className="w-full border border-slate-300 rounded-lg p-2"
-                />
+              <div className={chamber.groupsByUf ? 'grid grid-cols-3 gap-2' : ''}>
+                {chamber.groupsByUf && (
+                  <div>
+                    <label className="font-semibold text-slate-700 block mb-1">UF (bancada)</label>
+                    <select name="uf" defaultValue={chamber.uf} className="w-full border border-slate-300 rounded-lg p-2">
+                      {UFS.map((u) => (
+                        <option key={u.uf} value={u.uf}>
+                          {u.uf}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                <div className={chamber.groupsByUf ? 'col-span-2' : ''}>
+                  <label className="font-semibold text-slate-700 block mb-1">{chamber.electoralBaseLabel}</label>
+                  <input
+                    name="base"
+                    placeholder={chamber.sphere === 'municipal' ? 'Ex: Centro, CPA, Coxipó' : 'Ex: Sinop, Rondonópolis, Cuiabá'}
+                    className="w-full border border-slate-300 rounded-lg p-2"
+                  />
+                </div>
               </div>
 
               <div>
@@ -1543,8 +1689,15 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
               onSubmit={(e) => {
                 e.preventDefault();
                 const form = e.currentTarget;
+                const seat = parseInt((form.elements.namedItem('seatNumber') as HTMLInputElement).value, 10);
+                const err = seatError(seat, selectedDeputy.id);
+                if (err) {
+                  dialog.alert({ title: 'Cadeira inválida', message: err, tone: 'warning' });
+                  return;
+                }
                 const updated: Parliamentarian = {
                   ...selectedDeputy,
+                  ...(chamber.groupsByUf ? { uf: (form.elements.namedItem('uf') as HTMLSelectElement).value } : {}),
                   popularName: (form.elements.namedItem('popularName') as HTMLInputElement).value,
                   party: (form.elements.namedItem('party') as HTMLInputElement).value,
                   bloc: (form.elements.namedItem('bloc') as HTMLSelectElement).value as any,
@@ -1596,18 +1749,30 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
 
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="font-semibold text-slate-700 block mb-1">Cadeira no Plenário</label>
+                  <label className="font-semibold text-slate-700 block mb-1">Cadeira no Plenário (1 a {chamber.seats})</label>
                   <input
                     name="seatNumber"
                     type="number"
                     min="1"
-                    max="24"
+                    max={chamber.seats}
                     defaultValue={selectedDeputy.seatNumber}
                     className="w-full border border-slate-300 rounded-lg p-2 font-mono"
                   />
                 </div>
+                {chamber.groupsByUf && (
+                  <div>
+                    <label className="font-semibold text-slate-700 block mb-1">UF (bancada)</label>
+                    <select name="uf" defaultValue={selectedDeputy.uf ?? chamber.uf} className="w-full border border-slate-300 rounded-lg p-2">
+                      {UFS.map((u) => (
+                        <option key={u.uf} value={u.uf}>
+                          {u.uf}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 <div>
-                  <label className="font-semibold text-slate-700 block mb-1">Base Eleitoral</label>
+                  <label className="font-semibold text-slate-700 block mb-1">{chamber.electoralBaseLabel}</label>
                   <input
                     name="base"
                     defaultValue={selectedDeputy.electoralBase}

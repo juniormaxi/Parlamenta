@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { FileText, Plus, Search, Download, Printer, X, Maximize2, Pencil, FilterX, Trash2 } from 'lucide-react';
 import { DocumentModel, Cabinet } from '../../types';
+import { chamberConfig, ufInfo } from '../../lib/chamber';
 import { useDialog } from '../common/Dialogs';
 import { api } from '../../lib/api';
 import type { PropositionType } from './banco/ui';
@@ -429,6 +430,26 @@ function DocActions({
   );
 }
 
+const cabinetChamber = (c: Cabinet) => chamberConfig({ sphere: c.sphere, state: c.state, city: c.city, house: c.house, seats: c.seats });
+const CAPITALS: Record<string, string> = {
+  AC: 'Rio Branco', AL: 'Maceió', AP: 'Macapá', AM: 'Manaus', BA: 'Salvador', CE: 'Fortaleza', DF: 'Brasília', ES: 'Vitória',
+  GO: 'Goiânia', MA: 'São Luís', MT: 'Cuiabá', MS: 'Campo Grande', MG: 'Belo Horizonte', PA: 'Belém', PB: 'João Pessoa',
+  PR: 'Curitiba', PE: 'Recife', PI: 'Teresina', RJ: 'Rio de Janeiro', RN: 'Natal', RS: 'Porto Alegre', RO: 'Porto Velho',
+  RR: 'Boa Vista', SC: 'Florianópolis', SP: 'São Paulo', SE: 'Aracaju', TO: 'Palmas',
+};
+/** Local da casa para a data do documento: Brasília-DF, capital-UF ou município-UF. */
+const cabinetPlace = (c: Cabinet) =>
+  c.sphere === 'federal' ? 'Brasília-DF' : c.sphere === 'municipal' && c.city ? `${c.city}-${c.state}` : CAPITALS[c.state] ? `${CAPITALS[c.state]}-${c.state}` : c.state;
+
+/** Sigla no selo do timbre quando não há brasão: ALMT, CD, CM. */
+const cabinetSeal = (c: Cabinet) => (c.sphere === 'federal' ? 'CD' : c.sphere === 'municipal' ? 'CM' : ufInfo(c.state)?.assembly ?? 'AL');
+/** Linha abaixo da assinatura: cargo · local. */
+const cabinetSignature = (c: Cabinet) => {
+  const ch = cabinetChamber(c);
+  const place = c.sphere === 'municipal' ? (c.city ? `${c.city}/${c.state}` : c.state) : c.sphere === 'federal' ? (ufInfo(c.state) ? `Câmara dos Deputados · ${ufInfo(c.state)!.name}` : 'Câmara dos Deputados') : ufInfo(c.state) ? `Estado de ${ufInfo(c.state)!.name}` : '';
+  return [ch.memberTitle, place].filter(Boolean).join(' · ');
+};
+
 /** The official letterhead sheet, used in the side preview and in fullscreen. */
 function DocumentSheet({ doc, cabinet, logoUrl, large = false }: { doc: DocumentModel; cabinet: Cabinet; logoUrl?: string; large?: boolean }) {
   const paragraphs = doc.contentPreview.split(/\n+/).map((p) => p.trim()).filter(Boolean);
@@ -444,20 +465,24 @@ function DocumentSheet({ doc, cabinet, logoUrl, large = false }: { doc: Document
             <img src={logoUrl} alt="Brasão" className="max-h-full max-w-full object-contain" />
           ) : (
             <div className={`${large ? 'w-16 h-16' : 'w-12 h-12'} rounded-full border-2 border-[#102C45] flex items-center justify-center font-sans font-bold text-[#102C45]`}>
-              ALMT
+              {cabinetSeal(cabinet)}
             </div>
           )}
         </div>
         <h3 className={`font-sans font-bold uppercase tracking-wider text-[#102C45] ${large ? 'text-sm' : 'text-xs'}`}>{cabinet.house}</h3>
         <p className={`font-sans text-slate-600 ${large ? 'text-xs' : 'text-[11px]'}`}>Gabinete da {cabinet.parliamentarian}</p>
         <p className={`font-sans text-slate-400 ${large ? 'text-[11px]' : 'text-[10px]'}`}>
-          Palácio Paschoal Moreira Cabral · Centro Político Administrativo · Cuiabá - MT
+          {cabinet.sphere === 'estadual' && cabinet.state === 'MT'
+            ? 'Palácio Paschoal Moreira Cabral · Centro Político Administrativo · Cuiabá - MT'
+            : cabinetChamber(cabinet).house}
         </p>
       </div>
 
       <div className={`font-sans flex justify-between font-bold text-slate-700 ${large ? 'text-xs' : 'text-[11px]'}`}>
         <span>{doc.code}</span>
-        <span>Cuiabá-MT, {fmtDate(doc.createdAt)}</span>
+        <span>
+          {cabinetPlace(cabinet)}, {fmtDate(doc.createdAt)}
+        </span>
       </div>
 
       <div className="space-y-1">
@@ -483,7 +508,7 @@ function DocumentSheet({ doc, cabinet, logoUrl, large = false }: { doc: Document
       <div className="pt-8 text-center space-y-1 font-sans">
         <div className="w-48 border-t border-slate-400 mx-auto" />
         <p className={`font-bold text-[#102C45] ${large ? 'text-sm' : 'text-xs'}`}>{cabinet.parliamentarian}</p>
-        <p className="text-[10px] text-slate-500">Deputada Estadual · Estado de Mato Grosso</p>
+        <p className="text-[10px] text-slate-500">{cabinetSignature(cabinet)}</p>
         {isSigned(doc.status) ? (
           <div className="mt-2 text-[9px] font-mono text-emerald-700 bg-emerald-50 p-1 rounded inline-block">
             ✓ Assinado Digitalmente · ICP-Brasil · Hash: 9fa2...e41b

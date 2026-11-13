@@ -192,7 +192,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 {cabinetName}
               </p>
               <p className="text-[11px] text-slate-300">
-                Assembleia Legislativa de Mato Grosso (ALMT)
+                Câmaras Municipais · Assembleias Legislativas · Câmara dos Deputados
               </p>
             </div>
 
@@ -572,7 +572,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
               Conexão Segura TLS 1.3
             </span>
             <span className="font-mono text-[10px]">
-              Suporte Técnico ALMT / TI
+              Suporte Técnico Parlamentta
             </span>
           </div>
         </div>

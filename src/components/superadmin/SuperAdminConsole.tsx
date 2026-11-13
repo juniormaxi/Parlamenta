@@ -24,6 +24,8 @@ import {
   Wand2,
 } from 'lucide-react';
 import { useDialog } from '../common/Dialogs';
+import { ChamberFields, chamberDefaults, type ChamberValue } from './ChamberFields';
+import { chamberConfig } from '../../lib/chamber';
 import { api, ApiError, type ApiTenant, type ApiUser, type PlatformRole } from '../../lib/api';
 
 // ---------------------------------------------------------------------------
@@ -495,9 +497,12 @@ function TenantsTab({ tenants, run }: { tenants: TenantStats[]; run: Runner }) {
                   <p className="font-semibold text-slate-900">{t.name}</p>
                   <p className="text-[10px] text-slate-500 font-mono">{t.slug}</p>
                 </td>
-                <td className="px-4 py-3 capitalize text-slate-700">
-                  {t.sphere}
-                  {t.state && <span className="text-slate-400"> · {t.state}</span>}
+                <td className="px-4 py-3 text-slate-700">
+                  <span className="capitalize font-semibold">{t.sphere}</span>
+                  <span className="text-slate-400"> · {t.sphere === 'municipal' && t.city ? `${t.city}/${t.state}` : t.state}</span>
+                  <span className="block text-[10px] text-slate-500">
+                    {chamberConfig(t).houseShort} · {chamberConfig(t).seats} cadeiras
+                  </span>
                 </td>
                 <td className="px-4 py-3">
                   <StatusPill ok={t.status === 'active'} okLabel="Ativo" badLabel="Suspenso" />
@@ -585,9 +590,6 @@ function CreateTenantModal({ onClose, run }: { onClose: () => void; run: Runner 
     name: '',
     slug: '',
     parliamentarian: '',
-    sphere: 'estadual',
-    house: '',
-    state: 'MT',
     storageQuotaMb: 512,
     maxUsers: 25,
     adminName: '',
@@ -596,6 +598,7 @@ function CreateTenantModal({ onClose, run }: { onClose: () => void; run: Runner 
     adminPassword: genPassword(),
   });
   const [slugTouched, setSlugTouched] = useState(false);
+  const [chamber, setChamber] = useState<ChamberValue>({ sphere: 'estadual', state: 'MT', city: '', ...chamberDefaults('estadual', 'MT', '') });
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setF((p) => ({ ...p, [k]: e.target.value, ...(k === 'name' && !slugTouched ? { slug: slugify(e.target.value) } : {}) }));
 
@@ -613,9 +616,7 @@ function CreateTenantModal({ onClose, run }: { onClose: () => void; run: Runner 
                   name: f.name,
                   slug: f.slug,
                   parliamentarian: f.parliamentarian,
-                  sphere: f.sphere,
-                  house: f.house,
-                  state: f.state,
+                  ...chamber,
                   storageQuotaMb: Number(f.storageQuotaMb),
                   maxUsers: Number(f.maxUsers),
                   admin: { name: f.adminName, email: f.adminEmail, role: f.adminRole, password: f.adminPassword },
@@ -644,24 +645,12 @@ function CreateTenantModal({ onClose, run }: { onClose: () => void; run: Runner 
               pattern="[a-z0-9]+(-[a-z0-9]+)*"
             />
           </Field>
-          <Field label="Esfera">
-            <select className={inputCls} value={f.sphere} onChange={set('sphere')}>
-              <option value="estadual">Estadual</option>
-              <option value="federal">Federal</option>
-              <option value="municipal">Municipal</option>
-            </select>
+          <Field label="Parlamentar">
+            <input className={inputCls} value={f.parliamentarian} onChange={set('parliamentarian')} placeholder="Nome do(a) parlamentar" />
           </Field>
-          <div className="col-span-2">
-            <Field label="Parlamentar">
-              <input className={inputCls} value={f.parliamentarian} onChange={set('parliamentarian')} />
-            </Field>
+          <div className="col-span-2 p-3 rounded-xl border border-slate-200 bg-slate-50/60">
+            <ChamberFields value={chamber} onChange={setChamber} />
           </div>
-          <Field label="Casa legislativa">
-            <input className={inputCls} value={f.house} onChange={set('house')} placeholder="ALMT" />
-          </Field>
-          <Field label="UF">
-            <input className={inputCls} value={f.state} onChange={set('state')} maxLength={2} />
-          </Field>
           <Field label="Cota de armazenamento (MB)">
             <input className={inputCls} type="number" min={1} value={f.storageQuotaMb} onChange={set('storageQuotaMb')} />
           </Field>
@@ -712,14 +701,15 @@ function EditTenantModal({ tenant, onClose, run }: { tenant: TenantStats; onClos
   const [f, setF] = useState({
     name: tenant.name,
     parliamentarian: tenant.parliamentarian,
-    sphere: tenant.sphere,
-    house: tenant.house,
-    state: tenant.state,
     storageQuotaMb: tenant.storageQuotaMb,
     maxUsers: tenant.maxUsers,
   });
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setF((p) => ({ ...p, [k]: e.target.value }));
+  const [chamber, setChamber] = useState<ChamberValue>(() => {
+    const cfg = chamberConfig({ sphere: tenant.sphere, state: tenant.state || 'MT', city: tenant.city, house: tenant.house, seats: tenant.seats });
+    return { sphere: tenant.sphere, state: cfg.uf || 'MT', city: tenant.city ?? '', seats: cfg.seats, house: tenant.house || cfg.house };
+  });
 
   return (
     <Modal title={`Editar ${tenant.name}`} onClose={onClose}>
@@ -731,7 +721,7 @@ function EditTenantModal({ tenant, onClose, run }: { tenant: TenantStats; onClos
             () =>
               api(`/admin/tenants/${tenant.id}`, {
                 method: 'PATCH',
-                body: { ...f, storageQuotaMb: Number(f.storageQuotaMb), maxUsers: Number(f.maxUsers) },
+                body: { ...f, ...chamber, storageQuotaMb: Number(f.storageQuotaMb), maxUsers: Number(f.maxUsers) },
               }),
             'Gabinete atualizado.'
           );
@@ -744,20 +734,8 @@ function EditTenantModal({ tenant, onClose, run }: { tenant: TenantStats; onClos
         <Field label="Parlamentar">
           <input className={inputCls} value={f.parliamentarian} onChange={set('parliamentarian')} />
         </Field>
-        <div className="grid grid-cols-3 gap-3">
-          <Field label="Esfera">
-            <select className={inputCls} value={f.sphere} onChange={set('sphere')}>
-              <option value="estadual">Estadual</option>
-              <option value="federal">Federal</option>
-              <option value="municipal">Municipal</option>
-            </select>
-          </Field>
-          <Field label="Casa">
-            <input className={inputCls} value={f.house} onChange={set('house')} />
-          </Field>
-          <Field label="UF">
-            <input className={inputCls} value={f.state} onChange={set('state')} maxLength={2} />
-          </Field>
+        <div className="p-3 rounded-xl border border-slate-200 bg-slate-50/60">
+          <ChamberFields value={chamber} onChange={setChamber} />
         </div>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Cota (MB)" hint={`Em uso: ${fmtBytes(tenant.storageBytes)}`}>

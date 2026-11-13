@@ -62,6 +62,10 @@ export interface ApiTenant {
   sphere: 'estadual' | 'federal' | 'municipal';
   house: string;
   state: string;
+  /** Município (esfera municipal). */
+  city: string;
+  /** Cadeiras do plenário; 0 = padrão da esfera (ver src/lib/chamber.ts). */
+  seats: number;
   status: 'active' | 'suspended';
   storageQuotaMb: number;
   maxUsers: number;

@@ -54,6 +54,10 @@ export interface Cabinet {
   sphere: 'estadual' | 'federal' | 'municipal';
   house: string; // Ex: ALMT, Câmara dos Deputados
   state: string; // MT, DF, etc.
+  /** Município (esfera municipal). */
+  city?: string;
+  /** Cadeiras do plenário (0/undefined = padrão da esfera). */
+  seats?: number;
   party: string;
   logoUrl?: string;
 }
@@ -301,7 +305,9 @@ export interface Parliamentarian {
   party: string;
   partyColor: string;
   bloc: 'Governo' | 'Oposição' | 'Independente';
-  seatNumber: number; // 1 to 24 for ALMT
+  seatNumber: number; // 1..N (N = cadeiras da casa do gabinete)
+  /** UF de origem (Câmara dos Deputados: bancada estadual). */
+  uf?: string;
   role?: string;
   electoralBase: string;
   avatar?: string;
@@ -318,7 +324,7 @@ export interface VotingSession {
   theme: 'Saúde' | 'Infraestrutura' | 'Agricultura & Meio Ambiente' | 'Educação' | 'Tributário & Orçamento' | 'Segurança Pública' | 'Servidores Públicos';
   date: string;
   sessionNumber: string;
-  quorumType: 'Maioria Simples' | 'Maioria Absoluta' | 'Dois Terços (2/3)';
+  quorumType: 'Maioria Simples' | 'Maioria Absoluta' | 'Três Quintos (3/5)' | 'Dois Terços (2/3)';
   mandateVote: VoteChoice;
   result: 'Aprovado' | 'Rejeitado';
   votes: Record<string, VoteChoice>; // parliamentarianId -> choice

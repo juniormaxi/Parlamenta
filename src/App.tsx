@@ -84,6 +84,7 @@ import { CategoriasModule } from './components/modules/banco/CategoriasModule';
 import { DiscursosModule } from './components/modules/banco/DiscursosModule';
 import { ImportarModule } from './components/modules/banco/ImportarModule';
 import { ConhecimentoModule } from './components/modules/banco/ConhecimentoModule';
+import { chamberConfig } from './lib/chamber';
 
 function tenantToCabinet(t: ApiTenant): Cabinet {
   return {
@@ -93,6 +94,8 @@ function tenantToCabinet(t: ApiTenant): Cabinet {
     sphere: t.sphere,
     house: t.house,
     state: t.state,
+    city: t.city,
+    seats: t.seats,
     party: '',
   };
 }
@@ -185,8 +188,12 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>(mockAuditLogs);
   const [subscribers, setSubscribers] = useState<NewsletterSubscriber[]>(mockNewsletterSubscribers);
   const [campaigns, setCampaigns] = useState<NewsletterCampaign[]>(mockNewsletterCampaigns);
-  const [parliamentarians, setParliamentarians] = useState<Parliamentarian[]>(mockParliamentarians);
-  const [votingSessions, setVotingSessions] = useState<VotingSession[]>(mockVotingSessions);
+  // Casa legislativa do gabinete (esfera, cadeiras, quóruns). Os dados de exemplo do plenário são da ALMT:
+  // só aparecem para gabinete estadual de MT; nas demais casas o plenário começa vazio para cadastro.
+  const chamber = chamberConfig({ sphere: tenantCabinet.sphere, state: tenantCabinet.state, city: tenantCabinet.city, house: tenantCabinet.house, seats: tenantCabinet.seats });
+  const isAlmtDemo = chamber.sphere === 'estadual' && chamber.uf === 'MT';
+  const [parliamentarians, setParliamentarians] = useState<Parliamentarian[]>(isAlmtDemo ? mockParliamentarians : []);
+  const [votingSessions, setVotingSessions] = useState<VotingSession[]>(isAlmtDemo ? mockVotingSessions : []);
   const [bills, setBills] = useState<LegislativeBill[]>(mockLegislativeBills);
   // Ofício a destacar ao abrir Legislativo › Ofícios a partir da Base de Conhecimento.
   const [focusLetterId, setFocusLetterId] = useState<string | null>(null);
@@ -770,6 +777,7 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
 
           {(currentModule === 'legislativo_parlamento' || currentModule === 'legislativo') && (
             <ParlamentoHemicicloModule
+              chamber={chamber}
               parliamentarians={parliamentarians}
               votingSessions={votingSessions}
               onAddParliamentarian={handleAddParliamentarian}

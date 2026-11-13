@@ -293,7 +293,7 @@ export const DashboardModule: React.FC<DashboardModuleProps> = ({
                 <div>
                   <div className="flex justify-between text-slate-700 mb-1">
                     <span className="flex items-center gap-1.5 font-medium">
-                      Presencial no Gabinete (ALMT)
+                      Presencial no Gabinete
                     </span>
                     <span className="font-mono tabular-nums text-slate-500 font-semibold">8% (20)</span>
                   </div>
