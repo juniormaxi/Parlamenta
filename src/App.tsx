@@ -454,6 +454,10 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
     setDocuments((prev) => prev.map((d) => (d.id === updated.id ? updated : d)));
   };
 
+  const handleDeleteDocument = (id: string) => {
+    setDocuments((prev) => prev.filter((d) => d.id !== id));
+  };
+
   const handleUpdateRelease = (updated: PressRelease) => {
     setPressReleases((prev) =>
       prev.map((r) => (r.id === updated.id ? updated : r))
@@ -720,6 +724,7 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
               onOpenLogoModal={() => setLogoModalOpen(true)}
               onCreateDocument={handleCreateDocument}
               onUpdateDocument={handleUpdateDocument}
+              onDeleteDocument={handleDeleteDocument}
               onManageTypes={() => openCategorias('tipos')}
             />
           )}

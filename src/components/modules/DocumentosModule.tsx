@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { FileText, Plus, Search, Download, Printer, X, Maximize2, Pencil, FilterX } from 'lucide-react';
+import { FileText, Plus, Search, Download, Printer, X, Maximize2, Pencil, FilterX, Trash2 } from 'lucide-react';
 import { DocumentModel, Cabinet } from '../../types';
 import { useDialog } from '../common/Dialogs';
 import { api } from '../../lib/api';
@@ -12,6 +12,7 @@ interface DocumentosModuleProps {
   onOpenLogoModal: () => void;
   onCreateDocument: (newDoc: Omit<DocumentModel, 'id'>) => void;
   onUpdateDocument: (doc: DocumentModel) => void;
+  onDeleteDocument: (id: string) => void;
   /** Opens Banco de Dados › Categorias › Tipos de Proposição. */
   onManageTypes: () => void;
 }
@@ -40,6 +41,7 @@ export const DocumentosModule: React.FC<DocumentosModuleProps> = ({
   onOpenLogoModal,
   onCreateDocument,
   onUpdateDocument,
+  onDeleteDocument,
   onManageTypes,
 }) => {
   const dialog = useDialog();
@@ -85,14 +87,15 @@ export const DocumentosModule: React.FC<DocumentosModuleProps> = ({
   // The preview always shows a document from the filtered list.
   const selectedDoc = filteredDocs.find((d) => d.id === selectedId) ?? filteredDocs[0];
 
-  const openEdit = async () => {
-    if (!selectedDoc) return;
-    if (isSigned(selectedDoc.status)) {
+  const openEdit = async (doc: DocumentModel | undefined = selectedDoc) => {
+    if (!doc) return;
+    setSelectedId(doc.id);
+    if (isSigned(doc.status)) {
       const ok = await dialog.confirm({
         title: 'Editar documento assinado',
         message: (
           <>
-            <strong>{selectedDoc.code}</strong> já está {STATUS[selectedDoc.status].label.toLowerCase()}. Ao salvar alterações, ele volta para{' '}
+            <strong>{doc.code}</strong> já está {STATUS[doc.status].label.toLowerCase()}. Ao salvar alterações, ele volta para{' '}
             <strong>Em revisão</strong>, perde a assinatura e ganha uma nova versão.
           </>
         ),
@@ -102,6 +105,34 @@ export const DocumentosModule: React.FC<DocumentosModuleProps> = ({
       if (!ok) return;
     }
     setFormMode('edit');
+  };
+
+  const handleDelete = async (doc: DocumentModel | undefined = selectedDoc) => {
+    if (!doc) return;
+    const ok = await dialog.confirm({
+      title: 'Excluir documento?',
+      message: (
+        <>
+          <strong>{doc.code}</strong> · {doc.title}
+          <br />
+          {isSigned(doc.status)
+            ? `Este documento está ${STATUS[doc.status].label.toLowerCase()}. A exclusão não pode ser desfeita.`
+            : 'A exclusão não pode ser desfeita.'}
+        </>
+      ),
+      confirmLabel: 'Excluir',
+      tone: 'danger',
+    });
+    if (!ok) return;
+    // Mantém uma seleção válida: o próximo da lista filtrada (ou o anterior).
+    const idx = filteredDocs.findIndex((d) => d.id === doc.id);
+    const next = filteredDocs[idx + 1] ?? filteredDocs[idx - 1];
+    if (selectedDoc?.id === doc.id) {
+      setSelectedId(next?.id);
+      setFullscreen(false);
+    }
+    onDeleteDocument(doc.id);
+    dialog.toast(`Documento ${doc.code} excluído.`);
   };
 
   const handleSubmit = (data: DocFormData) => {
@@ -226,10 +257,18 @@ export const DocumentosModule: React.FC<DocumentosModuleProps> = ({
             {filteredDocs.map((doc) => {
               const isSelected = selectedDoc?.id === doc.id;
               return (
-                <button
+                <div
                   key={doc.id}
+                  role="button"
+                  tabIndex={0}
                   onClick={() => setSelectedId(doc.id)}
-                  className={`w-full text-left p-3.5 transition-colors border-l-4 ${
+                  onKeyDown={(e) => {
+                    if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) {
+                      e.preventDefault();
+                      setSelectedId(doc.id);
+                    }
+                  }}
+                  className={`group w-full text-left p-3.5 transition-colors border-l-4 cursor-pointer focus:outline-hidden focus-visible:ring-1 focus-visible:ring-[#176B80] ${
                     isSelected ? 'bg-[#E9F1F4]/70 border-l-[#176B80]' : 'border-l-transparent hover:bg-slate-50'
                   }`}
                 >
@@ -242,9 +281,35 @@ export const DocumentosModule: React.FC<DocumentosModuleProps> = ({
                     <span className="truncate">
                       <span className="font-semibold text-slate-600">{doc.category}</span> · {doc.recipient}
                     </span>
-                    <span className="font-mono shrink-0">v{doc.version}</span>
+                    <span className="flex items-center gap-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openEdit(doc);
+                        }}
+                        className="p-1 rounded text-slate-400 hover:text-[#176B80] hover:bg-white opacity-100 lg:opacity-0 lg:group-hover:opacity-100 lg:group-focus-within:opacity-100 focus:opacity-100"
+                        title="Editar documento"
+                        aria-label={`Editar ${doc.code}`}
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDelete(doc);
+                        }}
+                        className="p-1 rounded text-slate-400 hover:text-red-600 hover:bg-white opacity-100 lg:opacity-0 lg:group-hover:opacity-100 lg:group-focus-within:opacity-100 focus:opacity-100"
+                        title="Excluir documento"
+                        aria-label={`Excluir ${doc.code}`}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                      <span className="font-mono">v{doc.version}</span>
+                    </span>
                   </div>
-                </button>
+                </div>
               );
             })}
           </div>
@@ -261,7 +326,8 @@ export const DocumentosModule: React.FC<DocumentosModuleProps> = ({
                   <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${STATUS[selectedDoc.status].cls}`}>{STATUS[selectedDoc.status].label}</span>
                 </div>
                 <DocActions
-                  onEdit={openEdit}
+                  onEdit={() => openEdit()}
+                  onDelete={() => handleDelete()}
                   onFullscreen={() => setFullscreen(true)}
                   onPrint={() => window.print()}
                   onExport={() => dialog.toast(`Download simulado do arquivo ${selectedDoc.code}.pdf`, 'info')}
@@ -288,7 +354,8 @@ export const DocumentosModule: React.FC<DocumentosModuleProps> = ({
           logoUrl={customLogoUrl}
           suspendEsc={formMode !== null}
           onClose={() => setFullscreen(false)}
-          onEdit={openEdit}
+          onEdit={() => openEdit()}
+          onDelete={() => handleDelete()}
           onExport={() => dialog.toast(`Download simulado do arquivo ${selectedDoc.code}.pdf`, 'info')}
         />
       )}
@@ -314,12 +381,14 @@ export const DocumentosModule: React.FC<DocumentosModuleProps> = ({
 // ---------------------------------------------------------------------------
 function DocActions({
   onEdit,
+  onDelete,
   onFullscreen,
   onPrint,
   onExport,
   dark = false,
 }: {
   onEdit: () => void;
+  onDelete: () => void;
   onFullscreen?: () => void;
   onPrint: () => void;
   onExport: () => void;
@@ -332,6 +401,14 @@ function DocActions({
     <div className="flex items-center gap-2">
       <button onClick={onEdit} className={`${ghost} flex items-center gap-1.5 px-2.5 text-xs font-semibold`} title="Editar documento">
         <Pencil className="w-3.5 h-3.5" /> Editar
+      </button>
+      <button
+        onClick={onDelete}
+        className={`${ghost} ${dark ? 'hover:text-red-300' : 'hover:text-red-600 hover:border-red-200 hover:bg-red-50'}`}
+        title="Excluir documento"
+        aria-label="Excluir documento"
+      >
+        <Trash2 className="w-4 h-4" />
       </button>
       {onFullscreen && (
         <button onClick={onFullscreen} className={ghost} title="Ver em tela cheia" aria-label="Ver em tela cheia">
@@ -428,6 +505,7 @@ function FullscreenViewer({
   suspendEsc,
   onClose,
   onEdit,
+  onDelete,
   onExport,
 }: {
   doc: DocumentModel;
@@ -436,6 +514,7 @@ function FullscreenViewer({
   suspendEsc: boolean;
   onClose: () => void;
   onEdit: () => void;
+  onDelete: () => void;
   onExport: () => void;
 }) {
   useEffect(() => {
@@ -460,7 +539,7 @@ function FullscreenViewer({
           <p className="text-sm font-semibold truncate">{doc.title}</p>
         </div>
         <div className="flex items-center gap-2">
-          <DocActions dark onEdit={onEdit} onPrint={() => window.print()} onExport={onExport} />
+          <DocActions dark onEdit={onEdit} onDelete={onDelete} onPrint={() => window.print()} onExport={onExport} />
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-white/10 text-white/80 hover:text-white" title="Fechar (Esc)" aria-label="Fechar tela cheia">
             <X className="w-5 h-5" />
           </button>
