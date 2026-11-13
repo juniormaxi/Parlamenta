@@ -2,7 +2,7 @@
  * Base de Conhecimento — schema aditivo (fases 1 e 2).
  *
  * Tudo é idempotente e não destrutivo: só CREATE ... IF NOT EXISTS / ADD COLUMN IF NOT EXISTS.
- * Roda no boot, depois do SCHEMA principal (server/db.ts → migrate()).
+ * Aplicado pela migração 0002 (server/migrations.ts → `npm run db:migrate`), nunca no boot.
  *
  * Isolamento (RLS): as tabelas de conhecimento têm Row-Level Security. O contexto vem de variáveis
  * LOCAIS da transação (set_config(..., true)), aplicadas por server/kb/context.ts → somem no COMMIT/ROLLBACK,
@@ -268,14 +268,27 @@ export const KB_POLICIES = `
         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
     END IF;
 
-    -- Papel dedicado da aplicação (criado por scripts/create-app-role.sql): mantém os privilégios em dia
-    -- a cada boot, inclusive para tabelas novas. Sem o papel, nada a fazer.
+  END
+  $kb$;
+`;
+
+/**
+ * Privilégios do papel dedicado da aplicação (criado por scripts/create-app-role.sql). Roda ao fim de TODA
+ * execução de `npm run db:migrate` (idempotente), cobrindo tabelas criadas por migrações novas.
+ * Só DML: o papel nunca recebe DDL, TRUNCATE, REFERENCES nem TRIGGER, e não é dono de nada.
+ */
+export const KB_GRANTS = `
+  DO $g$
+  BEGIN
+    -- Sem o papel, nada a fazer.
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'parlamentta_app') THEN
       EXECUTE 'GRANT USAGE ON SCHEMA public TO parlamentta_app';
       EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO parlamentta_app';
       EXECUTE 'GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO parlamentta_app';
       EXECUTE 'GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO parlamentta_app';
+      -- controle de versão do esquema: a aplicação só lê
+      EXECUTE 'REVOKE INSERT, UPDATE, DELETE ON schema_migrations, kb_schema_meta FROM parlamentta_app';
     END IF;
   END
-  $kb$;
+  $g$;
 `;

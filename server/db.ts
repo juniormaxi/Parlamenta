@@ -18,7 +18,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import pg from 'pg';
-import { KB_SCHEMA, KB_POLICIES } from './kb/schema';
 
 /** Uploaded files (speeches) still live on disk — mount a Railway Volume here in production.
  *  PARLAMENTA_DATA_DIR (nome antigo) continua aceito para não quebrar deploys existentes. */
@@ -125,9 +124,10 @@ export async function tx<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 // ---------------------------------------------------------------------------
-// Schema (idempotent). Runs on boot — creates every table in a fresh database.
+// Esquema base (migração 0001_base em server/migrations.ts). NÃO roda mais no boot: use `npm run db:migrate`.
+// Mudanças futuras de esquema entram como NOVAS migrações em server/migrations.ts, não aqui.
 // ---------------------------------------------------------------------------
-const SCHEMA = `
+export const BASE_SCHEMA = `
   CREATE EXTENSION IF NOT EXISTS citext;
 
   -- SQLite-compatible time helpers: UTC text "YYYY-MM-DD HH:MM:SS".
@@ -664,30 +664,6 @@ const SCHEMA = `
     UNIQUE (tenant_id, phone_key)
   );
 `;
-
-/**
- * Creates/updates the schema. A cluster-wide advisory lock keeps concurrent boots from racing.
- * MIGRATION_DATABASE_URL (opcional): conexão do dono das tabelas. Necessária quando a aplicação usa um papel
- * sem privilégios (ex.: parlamentta_app, sujeito ao RLS); sem ela, a migração usa a própria DATABASE_URL.
- */
-export async function migrate() {
-  const url = process.env.MIGRATION_DATABASE_URL;
-  const owner = url
-    ? new pg.Client({ connectionString: url, ssl: /sslmode=require/.test(url) || process.env.PGSSL === 'require' ? { rejectUnauthorized: false } : undefined })
-    : null;
-  if (owner) await owner.connect();
-  const client = owner ?? (await pool.connect());
-  try {
-    await client.query('SELECT pg_advisory_lock(727274)');
-    await client.query(SCHEMA);
-    await client.query(KB_SCHEMA);
-    await client.query(KB_POLICIES);
-  } finally {
-    await client.query('SELECT pg_advisory_unlock(727274)').catch(() => undefined);
-    if (owner) await owner.end().catch(() => undefined);
-    else (client as pg.PoolClient).release();
-  }
-}
 
 export async function audit(entry: {
   actorId?: string | null;

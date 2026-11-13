@@ -5,9 +5,9 @@
  *  oficio    — Legislativo › Ofícios (official_letters). Visível ao gabinete.
  *  discurso  — Banco de Dados › Discursos (speeches), após a extração do texto. Visível ao gabinete.
  *              O arquivo original não é copiado: file_ref aponta para ele.
- *  protocolo — Protocolos & Demandas (protocols). SEM dados pessoais do cidadão (nome, telefone, e-mail,
- *              endereço; CPF/telefones/e-mails no texto são mascarados). Restrito a Coordenação de Atendimento,
- *              ao responsável pelo protocolo e (implicitamente) a Parlamentar/Chefe de Gabinete.
+ *  protocolo — Protocolos & Demandas (protocols). Só campos estruturados de uma lista fechada (número, tema,
+ *              município, situação, prioridade, canal, origem, data); nenhum texto livre nem dado do cidadão.
+ *              Restrito a Coordenação de Atendimento, ao responsável e (implicitamente) a Parlamentar/Chefe de Gabinete.
  *  clipping  — Comunicação › Clipping (clipping_items), título e resumo da notícia. Arquivadas saem da base.
  *
  * Não há integração com "documentos legislativos": o módulo não armazena documentos no servidor.
@@ -117,29 +117,33 @@ registerSource('discurso', {
 });
 
 // ---------------------------------------------------------------------------
-// Protocolos — sem dados pessoais
+// Protocolos — LISTA FECHADA de campos estruturados (nenhum texto livre)
 // ---------------------------------------------------------------------------
 export const PROTOCOL_TAG = 'Protocolos';
 export const PROTOCOL_ROLES = ['coordenador_atendimento'];
 
-/** Masks personal data in free text: the citizen's name, e-mails, phone numbers, CPF and CEP. */
-export function redactPersonalData(text: string, names: string[] = []): string {
-  let s = String(text ?? '');
-  s = s.replace(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g, '[e-mail]');
-  s = s.replace(/\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b/g, '[CPF]');
-  s = s.replace(/(\+?55\s?)?\(?\b\d{2}\)?[\s.-]?9?\d{4}[\s.-]?\d{4}\b/g, '[telefone]');
-  s = s.replace(/\b\d{5}-\d{3}\b/g, '[CEP]');
-  const parts = new Set<string>();
-  for (const n of names) {
-    const full = String(n ?? '').trim();
-    if (full.length >= 3) parts.add(full);
-    for (const p of full.split(/\s+/)) if (p.length >= 4 && !/^(da|de|do|das|dos)$/i.test(p)) parts.add(p);
-  }
-  for (const p of [...parts].sort((a, b) => b.length - a.length)) {
-    const esc = p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    s = s.replace(new RegExp(`(?<![\\p{L}])${esc}(?![\\p{L}])`, 'giu'), '[cidadão]');
-  }
-  return s;
+/**
+ * Campos do protocolo que podem ir para a Base de Conhecimento. Mascarar texto livre com expressões regulares
+ * não garante anonimização (nomes de terceiros, endereços descritos, apelidos, dados de saúde...). Por isso o
+ * assunto, o relato do cidadão, as notas internas, a resposta e os anexos NÃO entram: ficam apenas no módulo
+ * Protocolos, sob as permissões dele. A base guarda só categorias controladas e a referência ao original.
+ */
+export const PROTOCOL_KB_FIELDS = ['number', 'theme', 'city', 'status', 'priority', 'channel', 'origin', 'openedAt'] as const;
+
+const PRIORITY_LABEL: Record<string, string> = { baixa: 'Baixa', media: 'Média', alta: 'Alta', urgente: 'Urgente' };
+const one = (v: unknown, max = 80) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
+
+export function protocolKnowledgeFields(r: { number: string; status: string; city: string; source: string; created_at: string }, d: Record<string, any>) {
+  return {
+    number: one(r.number, 40),
+    theme: one(d.theme, 60), // vocabulário controlado (Categorias › Temas de Demanda)
+    city: one(r.city, 120),
+    status: PROTOCOL_STATUS[r.status] ?? one(r.status, 40),
+    priority: PRIORITY_LABEL[d.priority] ?? '',
+    channel: one(d.channelLabel || d.channel, 60), // canal cadastrado (Categorias › Canais de Entrada)
+    origin: r.source === 'web' ? 'Site do parlamentar' : 'Equipe do gabinete',
+    openedAt: String(d.createdAt ?? r.created_at).slice(0, 10),
+  } satisfies Record<(typeof PROTOCOL_KB_FIELDS)[number], string>;
 }
 
 registerSource('protocolo', {
@@ -148,51 +152,39 @@ registerSource('protocolo', {
   async load(tenantId, id) {
     const r = (await db.prepare(`SELECT * FROM protocols WHERE id = ? AND tenant_id = ?`).get(id, tenantId)) as any;
     if (!r) return null;
-    const d = JSON.parse(r.data);
-    const names = [d.citizenName].filter(Boolean);
-    const red = (v: unknown) => redactPersonalData(String(v ?? ''), names).trim();
-    const status = PROTOCOL_STATUS[r.status] ?? r.status;
-    const subject = red(d.subject);
+    const f = protocolKnowledgeFields(r, JSON.parse(r.data));
+    // Tema só entra se for do vocabulário cadastrado do gabinete (protocolos internos aceitam texto livre).
+    if (f.theme && !(await db.prepare(`SELECT 1 FROM demand_themes WHERE tenant_id = ? AND name = ?`).get(tenantId, f.theme))) f.theme = 'Outro tema';
     const content = [
-      `Protocolo ${r.number}`,
-      d.theme ? `Tema: ${d.theme}` : '',
-      r.city ? `Município: ${r.city}` : '',
-      `Situação: ${status}`,
-      d.priority ? `Prioridade: ${d.priority}` : '',
-      d.channelLabel || d.channel ? `Canal: ${d.channelLabel || d.channel}` : '',
+      `Protocolo ${f.number}`,
+      f.theme ? `Tema: ${f.theme}` : null,
+      f.city ? `Município: ${f.city}` : null,
+      `Situação: ${f.status}`,
+      f.priority ? `Prioridade: ${f.priority}` : null,
+      f.channel ? `Canal: ${f.channel}` : null,
+      `Origem: ${f.origin}`,
+      `Aberto em: ${f.openedAt}`,
       '',
-      `Assunto: ${subject}`,
-      '',
-      'Demanda:',
-      red(d.description),
-      d.resolutionNotes ? `\nEncaminhamento / resolução:\n${red(d.resolutionNotes)}` : '',
-      d.citizenFeedbackStatus === 'enviada_sucesso' && d.citizenFeedbackText ? `\nResposta do gabinete:\n${red(d.citizenFeedbackText)}` : '',
+      'O relato, o assunto e os dados do cidadão ficam apenas no módulo Protocolos, conforme as permissões do módulo.',
     ]
-      .filter((l, i, a) => l !== '' || a[i - 1] !== '')
+      .filter((l): l is string => l !== null)
       .join('\n');
+    const d = JSON.parse(r.data);
     const assignee = String(d.assigneeId ?? '').trim();
     const users = assignee
       ? ((await db.prepare(`SELECT id FROM users WHERE id = ? AND tenant_id = ?`).all(assignee, tenantId)) as any[]).map((u) => u.id)
       : [];
     return {
-      title: `${r.number} · ${subject}`,
-      summary: [d.theme, r.city, status].filter(Boolean).join(' · '),
+      title: [f.number, f.theme || 'Demanda', f.city].filter(Boolean).join(' · '),
+      summary: [f.status, f.priority && `prioridade ${f.priority.toLowerCase()}`, f.origin].filter(Boolean).join(' · '),
       content,
       tags: [PROTOCOL_TAG],
       docType: 'protocolo',
-      docNumber: r.number,
-      docDate: String(d.createdAt ?? r.created_at).slice(0, 10),
+      docNumber: f.number,
+      docDate: f.openedAt,
       authorId: null,
-      meta: {
-        number: r.number,
-        status: r.status,
-        statusLabel: status,
-        theme: d.theme ?? '',
-        cityTarget: r.city,
-        priority: d.priority ?? '',
-        source: r.source,
-        // deliberately absent: citizenName, citizenPhone, citizenEmail, address, attachments
-      },
+      fileRef: `protocol:${r.id}`, // o original continua no módulo Protocolos
+      meta: { ...f, statusLabel: f.status, cityTarget: f.city, statusCode: r.status },
       visibility: 'roles',
       acl: { roles: PROTOCOL_ROLES, users },
     } satisfies DocInput;

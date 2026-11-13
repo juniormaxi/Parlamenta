@@ -1,8 +1,9 @@
 /**
- * Postgres local para desenvolvimento, sem Docker: PGlite (Postgres 17 em WASM) exposto
+ * Postgres local para desenvolvimento, sem Docker: PGlite (Postgres 18 em WASM) exposto
  * pelo protocolo do Postgres em 127.0.0.1:5433. Dados em ./data/pg.
  *
  *   npm run dev:db
+ *   DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5433/postgres npm run db:migrate   (o boot não migra mais)
  *   DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5433/postgres PG_POOL_MAX=1 npm run dev:api
  *
  * PGlite tem uma única sessão: use PG_POOL_MAX=1 para que transações não se misturem.

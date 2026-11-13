@@ -21,7 +21,8 @@ import { rlsStatus } from './kb/context';
 import { startMetrics, metricsSummary } from './kb/metrics';
 import { plenarioRouter, startPlenarioScheduler, normalizeSaplUrl } from './plenario';
 import { ufInfo, seatLimits, defaultHouse, type Sphere } from '../src/lib/chamber';
-import { db, tx, migrate, audit, tenantStorageBytes, dbFileBytes } from './db';
+import { db, tx, pool, audit, tenantStorageBytes, dbFileBytes } from './db';
+import { assertSchemaCurrent } from './migrations';
 import {
   TENANT_ROLES,
   TENANT_ADMIN_ROLES,
@@ -72,7 +73,8 @@ async function bootstrapSuperAdmin() {
   else console.log('   senha : definida em SUPERADMIN_PASSWORD');
   console.log('=========================================================\n');
 }
-await migrate();
+// O esquema é migrado por `npm run db:migrate` (antes do deploy), nunca aqui: o boot só confere a versão.
+await assertSchemaCurrent(pool);
 await bootstrapSuperAdmin();
 
 // ---------------------------------------------------------------------------

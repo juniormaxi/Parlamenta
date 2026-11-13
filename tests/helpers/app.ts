@@ -6,12 +6,13 @@ import crypto from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import express from 'express';
 import '../../server/http';
-import { db, migrate, pool } from '../../server/db';
+import { db, pool } from '../../server/db';
+import { runMigrations, connectionFor } from '../../server/migrations';
 import { parseCookies, requireCsrfHeader, loadSession, requireTenantUser, requireSuperAdmin } from '../../server/auth';
 import { HttpError } from '../../server/http';
 import { knowledgeRouter } from '../../server/knowledge';
 import { oficiosRouter } from '../../server/oficios';
-import { tenantProtocolsRouter } from '../../server/protocols';
+import { tenantProtocolsRouter, publicRouter } from '../../server/protocols';
 import { bancoRouter } from '../../server/banco';
 import { clippingRouter } from '../../server/clipping';
 import { startJobWorker, type WorkerHandle } from '../../server/jobs';
@@ -20,8 +21,19 @@ import { rlsStatus } from '../../server/kb/context';
 
 export { db, pool };
 
+/** Explicit migration with the OWNER connection (as `npm run db:migrate` does). */
+export async function migrateAsOwner() {
+  const c = connectionFor(process.env.MIGRATION_DATABASE_URL!);
+  await c.connect();
+  try {
+    return await runMigrations(c);
+  } finally {
+    await c.end();
+  }
+}
+
 export async function setupApp() {
-  await migrate();
+  await migrateAsOwner();
   const app = express();
   const api = express.Router();
   api.use(express.json({ limit: '256kb' }));
@@ -37,6 +49,7 @@ export async function setupApp() {
   tenant.use('/db', bancoRouter);
   tenant.use('/clipping', clippingRouter);
   api.use('/tenant', tenant);
+  api.use('/public', publicRouter);
   api.use((err: any, _req: any, res: any, _next: any) => {
     if (err instanceof HttpError) return res.status(err.status).json({ error: err.message });
     console.error(err);

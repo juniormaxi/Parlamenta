@@ -156,31 +156,63 @@ test('documento extenso: fragmentado por completo, sem truncamento', async () =>
   assert.equal(item.index_status, 'indexed');
 });
 
-test('protocolo entra sem dados pessoais e com acesso restrito', async () => {
+test('protocolo: só campos estruturados na base; texto livre e dados do cidadão nunca saem do módulo', async () => {
+  await env.su.query(`INSERT INTO demand_themes (id, tenant_id, name) VALUES ('th-saude', $1, 'Saúde') ON CONFLICT DO NOTHING`, [T]);
+  const S = 'ZQXSENT'; // marcador único: não pode aparecer em lugar nenhum da camada de conhecimento
   const p = await api(U.dep, 'POST', '/tenant/protocols', {
-    citizenName: 'Maria Aparecida Souza',
+    citizenName: `Maria ${S}nome`,
     citizenPhone: '(65) 99876-5432',
-    citizenEmail: 'maria@exemplo.com',
+    citizenEmail: `${S}mail@exemplo.com`,
     citizenCity: 'Cuiabá',
     theme: 'Saúde',
-    subject: 'Consulta para Maria Aparecida',
-    description: 'A senhora Maria Aparecida Souza (CPF 123.456.789-09, tel 65 99876-5432, maria@exemplo.com) precisa de consulta.',
+    subject: `Consulta ${S}assunto`,
+    description: `A vizinha Joana ${S}relato, que mora na rua das Flores 12, está com câncer.`,
     priority: 'alta',
   });
   assert.equal(p.status, 201, JSON.stringify(p.body));
+  await api(U.dep, 'PATCH', `/tenant/protocols/${p.body.id}`, {
+    resolutionNotes: `Encaminhado ao Dr. ${S}nota`,
+    citizenFeedbackStatus: 'enviada_sucesso',
+    citizenFeedbackText: `Prezada, ${S}resposta`,
+    status: 'em_execucao',
+  });
+  // a free-text theme typed by staff is not a controlled category → generic label
+  const p2 = await api(U.dep, 'POST', '/tenant/protocols', { citizenName: 'X', subject: 'y', theme: `Tema ${S}livre`, citizenCity: 'Sinop' });
+  assert.equal(p2.status, 201);
+  await h.waitIdle(env.su);
+
   const r = await row('protocolo', p.body.id);
-  const all = `${r.title}\n${r.summary}\n${r.content}\n${r.meta}`;
-  for (const pii of ['Maria', 'Aparecida', 'Souza', '99876', '123.456', 'maria@exemplo.com']) assert.ok(!all.includes(pii), `vazou: ${pii}`);
-  assert.ok(r.content.includes('precisa de consulta'));
+  assert.equal(r.title, `${r.doc_number} · Saúde · Cuiabá`);
+  assert.match(r.content, /Situação: Em execução/);
   assert.equal(r.visibility, 'roles');
-  // assessor (not assignee) cannot see; coordination and Parlamentar can
+  assert.equal(r.file_ref, `protocol:${p.body.id}`);
+  assert.equal((await row('protocolo', p2.body.id)).title.includes('Outro tema'), true);
+
+  // nothing of the free text anywhere in the knowledge layer (catalog, chunks, versions, queue, KB audit)
+  const leaks = await env.su.query(
+    `SELECT 'items' AS t FROM knowledge_items WHERE (title || summary || content || meta || tags) LIKE $1
+     UNION ALL SELECT 'chunks' FROM knowledge_chunks WHERE text LIKE $1
+     UNION ALL SELECT 'jobs' FROM jobs WHERE payload LIKE $1 OR ref LIKE $1 OR last_error LIKE $1
+     UNION ALL SELECT 'audit' FROM audit_log WHERE action LIKE 'kb.%' AND COALESCE(details, '') LIKE $1`,
+    [`%${S}%`]
+  );
+  assert.deepEqual(leaks.rows, []);
+  for (const pii of ['Joana', 'Flores', 'câncer', '99876', 'Maria']) assert.ok(!(r.content + r.title + r.meta).includes(pii), pii);
+  // nor through the API (search by the marker finds nothing, even for the Parlamentar)
+  assert.equal((await items(U.dep, `?q=${S}`)).length, 0);
+  assert.equal((await items(U.dep, '?q=Joana')).length, 0);
+  // the original stays intact in the Protocolos module, under its own rules
+  const orig = (await api(U.dep, 'GET', '/tenant/protocols')).body.find((x: any) => x.id === p.body.id);
+  assert.ok(orig.description.includes(`${S}relato`));
+  assert.ok(orig.timeline.length >= 1);
+
+  // restricted access: assessor (not assignee) cannot see; coordination and Parlamentar can
   const vis = async (u: any) => (await items(u)).some((i) => i.id === r.id);
   assert.equal(await vis(U.ass), false);
   assert.equal(await vis(U.coord), true);
   assert.equal(await vis(U.dep), true);
-  // assigning to the assessor grants access through the source
   await api(U.dep, 'PATCH', `/tenant/protocols/${p.body.id}`, { assigneeId: U.ass.id, assigneeName: 'Assessor' });
-  assert.equal(await vis(U.ass), true);
+  assert.equal(await vis(U.ass), true, 'responsável passa a ver');
 });
 
 test('clipping: notícias novas entram pela fila; arquivar retira, desarquivar devolve', async () => {

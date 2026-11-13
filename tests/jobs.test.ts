@@ -16,8 +16,7 @@ before(async () => {
   env = await startTestEnv({ JOBS_LEASE_SECONDS: '2' });
   h = await import('./helpers/app');
   jobs = await import('../server/jobs');
-  const { migrate } = await import('../server/db');
-  await migrate();
+  await h.migrateAsOwner();
   await env.su.query(`CREATE TABLE test_runs (job_id text, key text, pid int, phase text, at timestamptz)`);
   await env.su.query(`GRANT SELECT, INSERT ON test_runs TO parlamentta_app`);
 });

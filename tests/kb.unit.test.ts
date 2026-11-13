@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 
 process.env.DATABASE_URL ||= 'postgres://unused@127.0.0.1:1/unused'; // modules import db.ts; no query is made here
 const { chunkText, pageAt } = await import('../server/kb/chunk');
-const { redactPersonalData } = await import('../server/kb/sources');
+const { protocolKnowledgeFields, PROTOCOL_KB_FIELDS } = await import('../server/kb/sources');
 const { prefixQuery } = await import('../server/knowledge');
 const { buildKnowledgeGraph, computeSimilarLinks } = await import('../server/knowledgeGraph');
 
@@ -35,11 +35,27 @@ test('seções e páginas', () => {
   assert.equal(pageAt([], 5), null);
 });
 
-test('máscara de dados pessoais', () => {
-  const s = redactPersonalData('João Carlos da Silva, CPF 123.456.789-09, fone (65) 99999-1234, joao@x.com, CEP 78000-000. O Silva pediu a reforma da praça.', ['João Carlos da Silva']);
-  for (const leak of ['João', 'Carlos', 'Silva', '123.456', '99999', 'joao@x.com', '78000']) assert.ok(!s.includes(leak), leak);
-  assert.match(s, /\[cidadão\].*\[CPF\].*\[telefone\].*\[e-mail\].*\[CEP\]/);
-  assert.ok(s.includes('reforma da praça'), 'partículas não são mascaradas isoladamente');
+test('protocolo: só campos da lista fechada, nenhum texto livre', () => {
+  const d = {
+    theme: 'Saúde',
+    priority: 'alta',
+    channelLabel: 'WhatsApp',
+    createdAt: '2026-10-02T10:00:00Z',
+    citizenName: 'SENTINELA_NOME',
+    citizenPhone: 'SENTINELA_FONE',
+    citizenEmail: 'SENTINELA_EMAIL',
+    subject: 'SENTINELA_ASSUNTO',
+    description: 'SENTINELA_RELATO minha vizinha Joana do posto',
+    resolutionNotes: 'SENTINELA_NOTA',
+    citizenFeedbackText: 'SENTINELA_RESPOSTA',
+    attachments: [{ name: 'SENTINELA_ANEXO' }],
+  };
+  const f = protocolKnowledgeFields({ number: 'PRT-2026-00001', status: 'em_analise', city: 'Sinop', source: 'web', created_at: '2026-10-02 10:00:00' }, d);
+  assert.deepEqual(Object.keys(f).sort(), [...PROTOCOL_KB_FIELDS].sort());
+  assert.ok(!JSON.stringify(f).includes('SENTINELA'));
+  assert.ok(!JSON.stringify(f).includes('Joana'));
+  assert.equal(f.status, 'Em análise');
+  assert.equal(f.origin, 'Site do parlamentar');
 });
 
 test('consulta textual por prefixo é segura', () => {

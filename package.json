@@ -12,6 +12,9 @@
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
     "dev:db": "tsx scripts/dev-db.ts",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "db:status": "tsx scripts/migrate.ts --status",
+    "db:check": "tsx scripts/db-check.ts",
     "wacli:install": "tsx scripts/install-wacli.ts",
     "test": "node --import tsx --test --test-concurrency=1 tests/*.test.ts",
     "test:perf": "KB_PERF=1 node --import tsx --test tests/kb.perf.test.ts"
