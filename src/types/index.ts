@@ -22,7 +22,8 @@ export type ModuleType =
   | 'bd_contatos'
   | 'bd_categorias'
   | 'bd_discursos'
-  | 'bd_importar';
+  | 'bd_importar'
+  | 'bd_conhecimento';
 
 export type UserRole =
   | 'deputado'

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   FileText,
   Sparkles,
@@ -19,25 +19,91 @@ import {
   X,
   ShieldCheck,
   Printer,
+  Pencil,
+  Trash2,
+  Maximize2,
+  Loader2,
+  Library,
 } from 'lucide-react';
-import { OfficialLetterModel } from '../../../types';
+import { Cabinet, OfficialLetterModel } from '../../../types';
 import { useDialog } from '../../common/Dialogs';
+import { oficios, type LetterInput } from '../../../lib/oficios';
+import { LetterSheet, printLetter, fmtLetterDate } from './oficioDocument';
 
 interface OficiosModuleProps {
-  letters: OfficialLetterModel[];
-  onCreateLetter: (letter: OfficialLetterModel) => void;
-  onUpdateLetter: (letter: OfficialLetterModel) => void;
+  cabinet: Cabinet;
+  logoUrl?: string;
+  /** Abre Banco de Dados › Base de Conhecimento. */
+  onOpenKnowledge?: () => void;
+  /** Ofício a selecionar ao abrir (ex.: vindo da Base de Conhecimento). */
+  focusId?: string | null;
 }
 
-export const OficiosModule: React.FC<OficiosModuleProps> = ({
-  letters,
-  onCreateLetter,
-  onUpdateLetter,
-}) => {
+const STATUS_OPTIONS: [OfficialLetterModel['status'], string][] = [
+  ['minuta', 'Minuta / Rascunho'],
+  ['revisao_juridica', 'Revisão Jurídica'],
+  ['assinado_deputado', 'Assinado pelo Parlamentar'],
+  ['protocolado_orgao', 'Protocolado no Órgão'],
+  ['respondido', 'Respondido pelo Órgão'],
+];
+
+export const OficiosModule: React.FC<OficiosModuleProps> = ({ cabinet, logoUrl, onOpenKnowledge, focusId }) => {
   const dialog = useDialog();
-  const [selectedLetter, setSelectedLetter] = useState<OfficialLetterModel | null>(
-    letters[0] || null
-  );
+  const [letters, setLetters] = useState<OfficialLetterModel[] | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [editing, setEditing] = useState<OfficialLetterModel | 'new' | null>(null);
+  const [fullscreen, setFullscreen] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const rows = await oficios.list();
+      setLetters(rows);
+      setSelectedId((cur) => {
+        const want = cur ?? focusId;
+        return want && rows.some((r) => r.id === want) ? want : rows[0]?.id ?? null;
+      });
+    } catch (e) {
+      setLetters([]);
+      dialog.alert({ title: 'Erro ao carregar ofícios', message: (e as Error).message, tone: 'danger' });
+    }
+  }, [dialog, focusId]);
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const saveLetter = async (id: string | null, data: LetterInput) => {
+    const saved = id ? await oficios.update(id, data) : await oficios.create(data);
+    setLetters((prev) => (id ? (prev ?? []).map((l) => (l.id === id ? saved : l)) : [saved, ...(prev ?? [])]));
+    setSelectedId(saved.id);
+    return saved;
+  };
+
+  const handleDelete = async (letter: OfficialLetterModel) => {
+    const ok = await dialog.confirm({
+      title: 'Excluir ofício?',
+      message: (
+        <>
+          <strong>{letter.code}</strong> · {letter.subject}
+          <br />O ofício também sai da Base de Conhecimento. Não é possível desfazer.
+        </>
+      ),
+      confirmLabel: 'Excluir',
+      tone: 'danger',
+    });
+    if (!ok) return;
+    try {
+      await oficios.remove(letter.id);
+      setFullscreen(false);
+      setLetters((prev) => {
+        const next = (prev ?? []).filter((l) => l.id !== letter.id);
+        setSelectedId((cur) => (cur === letter.id ? next[0]?.id ?? null : cur));
+        return next;
+      });
+      dialog.toast(`Ofício ${letter.code} excluído.`);
+    } catch (e) {
+      dialog.alert({ title: 'Erro ao excluir', message: (e as Error).message, tone: 'danger' });
+    }
+  };
   const [searchFilter, setSearchFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('todos');
   const [orgFilter, setOrgFilter] = useState('todos');
@@ -72,8 +138,11 @@ export const OficiosModule: React.FC<OficiosModuleProps> = ({
     OfficialLetterModel['aiVerification'] | null
   >(null);
 
+  const all = letters ?? [];
+  const selectedLetter = all.find((l) => l.id === selectedId) ?? null;
+
   // Filter letters
-  const filteredLetters = letters.filter((l) => {
+  const filteredLetters = all.filter((l) => {
     const matchSearch =
       l.code.toLowerCase().includes(searchFilter.toLowerCase()) ||
       l.subject.toLowerCase().includes(searchFilter.toLowerCase()) ||
@@ -85,7 +154,7 @@ export const OficiosModule: React.FC<OficiosModuleProps> = ({
   });
 
   // Unique orgs
-  const uniqueOrgs = Array.from(new Set(letters.map((l) => l.recipientOrg))).sort();
+  const uniqueOrgs = Array.from(new Set(all.map((l) => l.recipientOrg).filter(Boolean))).sort();
 
   // AI Generator Simulator
   const handleGenerateAiLetter = () => {
@@ -114,8 +183,8 @@ Renovando protestos de estima e consideração.
 
 Respeitosamente,
 
-Mariana Ribeiro
-Deputada Estadual — Assembleia Legislativa de Mato Grosso`;
+${cabinet.parliamentarian || cabinet.name}
+${cabinet.house || 'Assembleia Legislativa'}`;
 
       setGeneratedDraft({
         code,
@@ -126,11 +195,10 @@ Deputada Estadual — Assembleia Legislativa de Mato Grosso`;
     }, 1100);
   };
 
-  const handleSaveDraftAsLetter = () => {
+  const handleSaveDraftAsLetter = async () => {
     if (!generatedDraft) return;
 
-    const newLetter: OfficialLetterModel = {
-      id: `of-${Date.now()}`,
+    const newLetter: LetterInput = {
       code: generatedDraft.code,
       subject: generatedDraft.subject,
       recipientName: aiForm.recipientName,
@@ -155,10 +223,14 @@ Deputada Estadual — Assembleia Legislativa de Mato Grosso`;
       },
     };
 
-    onCreateLetter(newLetter);
-    setSelectedLetter(newLetter);
-    setCreateModalOpen(false);
-    setGeneratedDraft(null);
+    try {
+      await saveLetter(null, newLetter);
+      setCreateModalOpen(false);
+      setGeneratedDraft(null);
+      dialog.toast('Ofício salvo e enviado para a Base de Conhecimento.');
+    } catch (e) {
+      dialog.alert({ title: 'Erro ao salvar o ofício', message: (e as Error).message, tone: 'danger' });
+    }
   };
 
   // AI Verifier Simulator
@@ -168,7 +240,7 @@ Deputada Estadual — Assembleia Legislativa de Mato Grosso`;
     setIsAiVerifying(true);
     setVerificationResult(null);
 
-    setTimeout(() => {
+    setTimeout(async () => {
       const result: OfficialLetterModel['aiVerification'] = {
         institutionalToneScore: 96,
         protocolaryCompliance: 'aprovado',
@@ -187,12 +259,11 @@ Deputada Estadual — Assembleia Legislativa de Mato Grosso`;
       setVerificationResult(result);
       setIsAiVerifying(false);
 
-      const updated: OfficialLetterModel = {
-        ...letter,
-        aiVerification: result,
-      };
-      onUpdateLetter(updated);
-      setSelectedLetter(updated);
+      try {
+        await saveLetter(letter.id, { ...letter, aiVerification: result });
+      } catch (e) {
+        dialog.alert({ title: 'Erro ao salvar a verificação', message: (e as Error).message, tone: 'danger' });
+      }
     }, 1000);
   };
 
@@ -220,7 +291,24 @@ Deputada Estadual — Assembleia Legislativa de Mato Grosso`;
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {onOpenKnowledge && (
+            <button
+              onClick={onOpenKnowledge}
+              className="px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-lg transition-colors flex items-center gap-1.5"
+              title="Todos os ofícios ficam também em Banco de Dados › Base de Conhecimento"
+            >
+              <Library className="w-3.5 h-3.5 text-[#176B80]" />
+              <span>Base de Conhecimento</span>
+            </button>
+          )}
+          <button
+            onClick={() => setEditing('new')}
+            className="px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-lg transition-colors flex items-center gap-1.5"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>Novo ofício</span>
+          </button>
           <button
             onClick={() => setCreateModalOpen(true)}
             className="px-3.5 py-1.5 text-xs font-semibold text-white bg-[#102C45] hover:bg-[#176B80] rounded-lg transition-colors flex items-center gap-1.5 shadow-xs"
@@ -279,12 +367,22 @@ Deputada Estadual — Assembleia Legislativa de Mato Grosso`;
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
         {/* Left: List */}
         <div className="lg:col-span-5 space-y-2.5">
+          {!letters && (
+            <div className="bg-white border border-slate-200 rounded-xl p-8 text-center text-slate-400">
+              <Loader2 className="w-5 h-5 animate-spin inline" />
+            </div>
+          )}
+          {letters && filteredLetters.length === 0 && (
+            <div className="bg-white border border-slate-200 rounded-xl p-8 text-center text-xs text-slate-500">
+              {all.length ? 'Nenhum ofício com esses filtros.' : 'Nenhum ofício ainda. Use “Novo ofício” ou “Criar Ofício com IA”.'}
+            </div>
+          )}
           {filteredLetters.map((letter) => {
             const isSelected = selectedLetter?.id === letter.id;
             return (
               <div
                 key={letter.id}
-                onClick={() => setSelectedLetter(letter)}
+                onClick={() => setSelectedId(letter.id)}
                 className={`p-4 rounded-xl border transition-all cursor-pointer ${
                   isSelected
                     ? 'border-[#176B80] bg-[#176B80]/5 shadow-xs'
@@ -312,6 +410,8 @@ Deputada Estadual — Assembleia Legislativa de Mato Grosso`;
                       ? 'Respondido com Sucesso'
                       : letter.status === 'revisao_juridica'
                       ? 'Em Revisão Jurídica'
+                      : letter.status === 'assinado_deputado'
+                      ? 'Assinado'
                       : 'Minuta'}
                   </span>
                 </div>
@@ -330,7 +430,7 @@ Deputada Estadual — Assembleia Legislativa de Mato Grosso`;
                 <div className="flex items-center justify-between text-[11px] text-slate-500 pt-2 border-t border-slate-100">
                   <span className="flex items-center gap-1">
                     <MapPin className="w-3 h-3 text-slate-400" />
-                    {letter.cityTarget || 'Mato Grosso'} · {letter.date}
+                    {letter.cityTarget || cabinet.state || '—'} · {fmtLetterDate(letter.date)}
                   </span>
                   {letter.aiVerification && (
                     <span className="flex items-center gap-1 font-mono font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200">
@@ -352,7 +452,7 @@ Deputada Estadual — Assembleia Legislativa de Mato Grosso`;
               <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-100 gap-2">
                 <div>
                   <div className="flex items-center gap-2">
-                    <span className="font-mono text-sm font-bold text-white bg-[#102C45] px-2.5 py-1 rounded">
+                    <span className="font-mono text-sm font-bold text-white bg-[#102C45] px-2.5 py-1 rounded whitespace-nowrap">
                       {selectedLetter.code}
                     </span>
                     <span className="text-xs font-semibold text-slate-600">
@@ -362,7 +462,15 @@ Deputada Estadual — Assembleia Legislativa de Mato Grosso`;
                   <h2 className="text-base font-bold text-slate-900 mt-1">{selectedLetter.subject}</h2>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={() => setEditing(selectedLetter)}
+                    className="px-2.5 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors flex items-center gap-1.5"
+                    title="Editar ofício"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                    <span>Editar</span>
+                  </button>
                   <button
                     onClick={() => handleRunAiVerification(selectedLetter)}
                     className="px-3 py-1.5 text-xs font-semibold text-white bg-[#176B80] hover:bg-[#102C45] rounded-lg transition-colors flex items-center gap-1.5 shadow-xs"
@@ -381,11 +489,28 @@ Deputada Estadual — Assembleia Legislativa de Mato Grosso`;
                     <Copy className="w-4 h-4" />
                   </button>
                   <button
-                    onClick={() => window.print()}
+                    onClick={() => setFullscreen(true)}
                     className="p-1.5 text-slate-500 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
-                    title="Imprimir visualização"
+                    title="Ver em tela cheia"
+                    aria-label="Ver em tela cheia"
+                  >
+                    <Maximize2 className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => printLetter(selectedLetter, cabinet, logoUrl)}
+                    className="p-1.5 text-slate-500 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
+                    title="Imprimir ofício"
+                    aria-label="Imprimir ofício"
                   >
                     <Printer className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => handleDelete(selectedLetter)}
+                    className="p-1.5 text-slate-500 hover:text-rose-700 bg-slate-100 hover:bg-rose-50 rounded-lg transition-colors"
+                    title="Excluir ofício"
+                    aria-label="Excluir ofício"
+                  >
+                    <Trash2 className="w-4 h-4" />
                   </button>
                 </div>
               </div>
@@ -442,24 +567,8 @@ Deputada Estadual — Assembleia Legislativa de Mato Grosso`;
               </div>
 
               {/* Official Document Sheet */}
-              <div className="p-6 bg-slate-50 border border-slate-300 rounded-xl space-y-4 font-serif text-slate-900 shadow-inner">
-                {/* Official Letterhead Header */}
-                <div className="text-center space-y-0.5 border-b border-slate-300 pb-3 font-sans">
-                  <div className="text-xs font-bold uppercase tracking-wider text-slate-800">
-                    Assembleia Legislativa do Estado de Mato Grosso
-                  </div>
-                  <div className="text-xs font-semibold text-slate-600">
-                    Gabinete Parlamentar da Deputada Mariana Ribeiro
-                  </div>
-                  <div className="text-[11px] font-mono text-slate-500">
-                    {selectedLetter.code} · Cuiabá-MT, {selectedLetter.date}
-                  </div>
-                </div>
-
-                {/* Body Text */}
-                <div className="whitespace-pre-line text-sm leading-relaxed text-slate-800 px-2">
-                  {selectedLetter.body}
-                </div>
+              <div className="p-3 bg-slate-100 rounded-xl">
+                <LetterSheet letter={selectedLetter} cabinet={cabinet} logoUrl={logoUrl} />
               </div>
             </div>
           ) : (
@@ -735,6 +844,233 @@ Deputada Estadual — Assembleia Legislativa de Mato Grosso`;
           </div>
         </div>
       )}
+
+      {editing && (
+        <LetterFormModal
+          letter={editing === 'new' ? null : editing}
+          onClose={() => setEditing(null)}
+          onSave={async (data) => {
+            await saveLetter(editing === 'new' ? null : editing.id, data);
+            setEditing(null);
+            dialog.toast(editing === 'new' ? 'Ofício criado e enviado para a Base de Conhecimento.' : 'Ofício atualizado.');
+          }}
+        />
+      )}
+
+      {fullscreen && selectedLetter && (
+        <LetterFullscreen
+          letter={selectedLetter}
+          cabinet={cabinet}
+          logoUrl={logoUrl}
+          suspendEsc={editing !== null}
+          onClose={() => setFullscreen(false)}
+          onEdit={() => setEditing(selectedLetter)}
+          onDelete={() => handleDelete(selectedLetter)}
+        />
+      )}
     </div>
   );
 };
+
+// ---------------------------------------------------------------------------
+// Tela cheia: documento ocupando quase toda a tela, fundo desfocado
+// ---------------------------------------------------------------------------
+function LetterFullscreen({
+  letter,
+  cabinet,
+  logoUrl,
+  suspendEsc,
+  onClose,
+  onEdit,
+  onDelete,
+}: {
+  letter: OfficialLetterModel;
+  cabinet: Cabinet;
+  logoUrl?: string;
+  suspendEsc: boolean;
+  onClose: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !suspendEsc) onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [onClose, suspendEsc]);
+
+  const btn = 'px-2.5 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5';
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-md flex items-center justify-center p-3 sm:p-6"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Ofício ${letter.code} em tela cheia`}
+      onMouseDown={onClose}
+    >
+      <div
+        className="w-full h-full max-w-[1100px] bg-slate-100 rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <div className="bg-white border-b border-slate-200 px-4 py-3 flex flex-wrap items-center justify-between gap-2 shrink-0">
+          <div className="min-w-0">
+            <p className="font-mono text-xs font-bold text-[#176B80]">{letter.code}</p>
+            <p className="text-sm font-semibold text-slate-900 truncate">{letter.subject}</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button onClick={onEdit} className={`${btn} text-slate-700 bg-slate-100 hover:bg-slate-200`}>
+              <Pencil className="w-3.5 h-3.5" /> Editar
+            </button>
+            <button onClick={() => printLetter(letter, cabinet, logoUrl)} className={`${btn} text-white bg-[#102C45] hover:bg-[#176B80]`}>
+              <Printer className="w-3.5 h-3.5" /> Imprimir
+            </button>
+            <button onClick={onDelete} className={`${btn} text-rose-700 bg-rose-50 hover:bg-rose-100`} title="Excluir ofício">
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+            <button onClick={onClose} className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-100" title="Fechar (Esc)" aria-label="Fechar">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+        <div className="flex-1 overflow-y-auto p-4 sm:p-8">
+          <LetterSheet letter={letter} cabinet={cabinet} logoUrl={logoUrl} large />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Criar / editar ofício
+// ---------------------------------------------------------------------------
+function LetterFormModal({
+  letter,
+  onClose,
+  onSave,
+}: {
+  letter: OfficialLetterModel | null;
+  onClose: () => void;
+  onSave: (data: LetterInput) => Promise<void>;
+}) {
+  const dialog = useDialog();
+  const year = new Date().getFullYear();
+  const [f, setF] = useState<LetterInput>(() =>
+    letter
+      ? { ...letter }
+      : {
+          code: `OF-GAB-${year}/`,
+          subject: '',
+          recipientName: '',
+          recipientRole: '',
+          recipientOrg: '',
+          cityTarget: '',
+          date: new Date().toISOString().slice(0, 10),
+          status: 'minuta',
+          body: '',
+          deadlineResponseDays: 15,
+          linkedProtocolId: '',
+        }
+  );
+  const [saving, setSaving] = useState(false);
+  const set = (k: keyof LetterInput) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) =>
+    setF({ ...f, [k]: k === 'deadlineResponseDays' ? Number(e.target.value) : e.target.value });
+  const field = 'w-full border border-slate-300 rounded-lg p-2 text-xs focus:outline-hidden focus:ring-1 focus:ring-[#176B80]';
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      await onSave({ ...f, code: f.code.trim(), subject: f.subject.trim() });
+    } catch (err) {
+      dialog.alert({ title: 'Erro ao salvar o ofício', message: (err as Error).message, tone: 'danger' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[55] flex items-center justify-center bg-black/50 backdrop-blur-xs p-4" onMouseDown={onClose}>
+      <form
+        onSubmit={submit}
+        onMouseDown={(e) => e.stopPropagation()}
+        className="bg-white rounded-2xl max-w-3xl w-full max-h-[94vh] flex flex-col shadow-2xl border border-slate-200"
+      >
+        <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-[#102C45] text-white rounded-t-2xl">
+          <h3 className="font-bold text-sm">{letter ? `Editar ${letter.code}` : 'Novo ofício'}</h3>
+          <button type="button" onClick={onClose} className="text-slate-300 hover:text-white" aria-label="Fechar">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-6 grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs text-slate-700">
+          <label className="space-y-1">
+            <span className="font-semibold block">Número do ofício *</span>
+            <input className={`${field} font-mono`} required value={f.code} onChange={set('code')} />
+          </label>
+          <label className="space-y-1">
+            <span className="font-semibold block">Data</span>
+            <input type="date" className={field} value={f.date} onChange={set('date')} />
+          </label>
+          <label className="space-y-1">
+            <span className="font-semibold block">Situação</span>
+            <select className={field} value={f.status} onChange={set('status')}>
+              {STATUS_OPTIONS.map(([v, l]) => (
+                <option key={v} value={v}>
+                  {l}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="space-y-1 sm:col-span-3">
+            <span className="font-semibold block">Assunto *</span>
+            <input className={field} required value={f.subject} onChange={set('subject')} />
+          </label>
+          <label className="space-y-1">
+            <span className="font-semibold block">Nome do destinatário</span>
+            <input className={field} value={f.recipientName} onChange={set('recipientName')} />
+          </label>
+          <label className="space-y-1">
+            <span className="font-semibold block">Cargo</span>
+            <input className={field} value={f.recipientRole} onChange={set('recipientRole')} />
+          </label>
+          <label className="space-y-1">
+            <span className="font-semibold block">Órgão / Secretaria</span>
+            <input className={field} value={f.recipientOrg} onChange={set('recipientOrg')} />
+          </label>
+          <label className="space-y-1">
+            <span className="font-semibold block">Município</span>
+            <input className={field} value={f.cityTarget ?? ''} onChange={set('cityTarget')} />
+          </label>
+          <label className="space-y-1">
+            <span className="font-semibold block">Prazo de resposta (dias)</span>
+            <input type="number" min={0} max={365} className={field} value={f.deadlineResponseDays ?? 15} onChange={set('deadlineResponseDays')} />
+          </label>
+          <label className="space-y-1">
+            <span className="font-semibold block">Protocolo vinculado</span>
+            <input className={`${field} font-mono`} value={f.linkedProtocolId ?? ''} onChange={set('linkedProtocolId')} placeholder="PRT-2026-0042" />
+          </label>
+          <label className="space-y-1 sm:col-span-3">
+            <span className="font-semibold block">Texto do ofício *</span>
+            <textarea className={`${field} font-serif text-[13px] leading-relaxed`} rows={16} required value={f.body} onChange={set('body')} />
+          </label>
+        </div>
+        <div className="px-6 py-3 bg-slate-50 border-t border-slate-200 rounded-b-2xl flex items-center justify-between gap-2">
+          <span className="text-[10px] text-slate-500">Ao salvar, o ofício é atualizado também na Base de Conhecimento (etiqueta “Ofícios”).</span>
+          <div className="flex gap-2">
+            <button type="button" onClick={onClose} className="px-3 py-1.5 text-xs text-slate-600 hover:text-slate-900">
+              Cancelar
+            </button>
+            <button type="submit" disabled={saving} className="px-4 py-1.5 text-xs font-semibold text-white bg-[#102C45] hover:bg-[#176B80] rounded-lg flex items-center gap-1.5 disabled:opacity-50">
+              {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />} {letter ? 'Salvar alterações' : 'Criar ofício'}
+            </button>
+          </div>
+        </div>
+      </form>
+    </div>
+  );
+}

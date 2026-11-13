@@ -561,6 +561,37 @@ const SCHEMA = `
   );
   CREATE INDEX IF NOT EXISTS idx_crm_campaigns_tenant ON crm_campaigns(tenant_id);
 
+  -- Legislativo › Ofícios (dados do ofício em JSON; colunas para busca/ordenação).
+  CREATE TABLE IF NOT EXISTS official_letters (
+    id          TEXT PRIMARY KEY,
+    tenant_id   TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    code        TEXT NOT NULL,
+    subject     TEXT NOT NULL,
+    data        TEXT NOT NULL,
+    created_by  TEXT REFERENCES users(id) ON DELETE SET NULL,
+    created_at  TEXT NOT NULL DEFAULT datetime('now'),
+    updated_at  TEXT NOT NULL DEFAULT datetime('now')
+  );
+  CREATE INDEX IF NOT EXISTS idx_letters_tenant ON official_letters(tenant_id, created_at);
+
+  -- Banco de Dados › Base de Conhecimento: documentos do gabinete (ofícios, etc.) com etiquetas.
+  CREATE TABLE IF NOT EXISTS knowledge_items (
+    id          TEXT PRIMARY KEY,
+    tenant_id   TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    source      TEXT NOT NULL,
+    source_id   TEXT NOT NULL,
+    title       TEXT NOT NULL,
+    summary     TEXT NOT NULL DEFAULT '',
+    content     TEXT NOT NULL DEFAULT '',
+    tags        TEXT NOT NULL DEFAULT '[]',
+    meta        TEXT NOT NULL DEFAULT '{}',
+    created_by  TEXT REFERENCES users(id) ON DELETE SET NULL,
+    created_at  TEXT NOT NULL DEFAULT datetime('now'),
+    updated_at  TEXT NOT NULL DEFAULT datetime('now'),
+    UNIQUE (tenant_id, source, source_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_knowledge_tenant ON knowledge_items(tenant_id, updated_at);
+
   -- Mesma chave de server/blocklist.ts (blockKey): dígitos, sem 55, com o 9 do celular.
   CREATE OR REPLACE FUNCTION phone_key(p text) RETURNS text LANGUAGE sql IMMUTABLE AS $$
     SELECT CASE WHEN length(d) = 10 AND substr(d, 3, 1) IN ('6','7','8','9') THEN substr(d, 1, 2) || '9' || substr(d, 3) ELSE d END
@@ -635,6 +666,8 @@ export async function tenantStorageBytes(): Promise<Map<string, number>> {
        + COALESCE((SELECT SUM(length(COALESCE(i.rows_json,'')) + 96) FROM contact_imports i WHERE i.tenant_id = t.id), 0)
        + COALESCE((SELECT SUM(length(ci.title) + length(ci.summary) + length(ci.url) + 200) FROM clipping_items ci WHERE ci.tenant_id = t.id), 0)
        + COALESCE((SELECT SUM(length(p.data) + 128) FROM protocols p WHERE p.tenant_id = t.id), 0)
+       + COALESCE((SELECT SUM(length(ol.data) + 128) FROM official_letters ol WHERE ol.tenant_id = t.id), 0)
+       + COALESCE((SELECT SUM(length(k.content) + length(k.title) + length(k.tags) + 128) FROM knowledge_items k WHERE k.tenant_id = t.id), 0)
        + COALESCE((SELECT SUM(length(l.name) + length(l.email) + length(l.notes) + length(l.agent_notes) + 96) FROM crm_leads l WHERE l.tenant_id = t.id), 0)
        + COALESCE((SELECT SUM(length(cc.body) + length(cc.url) + cc.image_size + 128) FROM crm_campaigns cc WHERE cc.tenant_id = t.id), 0)
          AS bytes

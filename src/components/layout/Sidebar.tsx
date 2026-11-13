@@ -28,6 +28,7 @@ import {
   Mic,
   Rss,
   Target,
+  Library,
 } from 'lucide-react';
 import { ModuleType, Cabinet } from '../../types';
 
@@ -112,6 +113,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
     { id: 'bd_contatos', label: 'Contatos', icon: BookUser, group: 'dados' },
     { id: 'bd_categorias', label: 'Categorias', icon: FolderTree, group: 'dados' },
+    { id: 'bd_conhecimento', label: 'Base de Conhecimento', icon: Library, group: 'dados' },
     { id: 'bd_importar', label: 'Importar Bancos de Dados', icon: FileSpreadsheet, group: 'dados' },
     { id: 'relatorios', label: 'Relatórios & Métricas', icon: BarChart3, group: 'sistema' },
     { id: 'integracoes', label: 'Canais & Integrações', icon: Sliders, group: 'sistema' },

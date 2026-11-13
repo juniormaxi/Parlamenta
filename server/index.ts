@@ -13,6 +13,8 @@ import { startEmailWorker } from './mailer';
 import { whatsappRouter, startWhatsApp, forgetWhatsAppTenant } from './whatsapp';
 import { crmRouter } from './crm';
 import { blocklistRouter } from './blocklist';
+import { oficiosRouter } from './oficios';
+import { knowledgeRouter } from './knowledge';
 import { db, tx, migrate, audit, tenantStorageBytes, dbFileBytes } from './db';
 import {
   TENANT_ROLES,
@@ -532,6 +534,10 @@ tenant.use('/crm', crmRouter);
 
 // Administração & LGPD › Números Bloqueados — always scoped to the session's tenant.
 tenant.use('/blocklist', blocklistRouter);
+
+// Legislativo › Ofícios e Banco de Dados › Base de Conhecimento — always scoped to the session's tenant.
+tenant.use('/oficios', oficiosRouter);
+tenant.use('/knowledge', knowledgeRouter);
 
 api.use('/tenant', tenant);
 // Site do parlamentar (sem login): abertura de demanda e consulta de protocolo.

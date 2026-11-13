@@ -25,7 +25,6 @@ import {
   Parliamentarian,
   VotingSession,
   LegislativeBill,
-  OfficialLetterModel,
 } from './types';
 import {
   mockCabinets,
@@ -44,7 +43,6 @@ import {
   mockParliamentarians,
   mockVotingSessions,
   mockLegislativeBills,
-  mockOfficialLetters,
 } from './data/mockData';
 
 // Layout & Common Components
@@ -85,6 +83,7 @@ import { ContatosModule } from './components/modules/banco/ContatosModule';
 import { CategoriasModule } from './components/modules/banco/CategoriasModule';
 import { DiscursosModule } from './components/modules/banco/DiscursosModule';
 import { ImportarModule } from './components/modules/banco/ImportarModule';
+import { ConhecimentoModule } from './components/modules/banco/ConhecimentoModule';
 
 function tenantToCabinet(t: ApiTenant): Cabinet {
   return {
@@ -189,7 +188,8 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
   const [parliamentarians, setParliamentarians] = useState<Parliamentarian[]>(mockParliamentarians);
   const [votingSessions, setVotingSessions] = useState<VotingSession[]>(mockVotingSessions);
   const [bills, setBills] = useState<LegislativeBill[]>(mockLegislativeBills);
-  const [officialLetters, setOfficialLetters] = useState<OfficialLetterModel[]>(mockOfficialLetters);
+  // Ofício a destacar ao abrir Legislativo › Ofícios a partir da Base de Conhecimento.
+  const [focusLetterId, setFocusLetterId] = useState<string | null>(null);
 
   // Protocolos gravados no servidor (equipe + site do parlamentar) aparecem antes dos de demonstração.
   const dialog = useDialog();
@@ -526,16 +526,6 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
     setBills((prev) => prev.map((b) => (b.id === bill.id ? bill : b)));
   };
 
-  const handleCreateLetter = (letter: OfficialLetterModel) => {
-    setOfficialLetters((prev) => [letter, ...prev]);
-  };
-
-  const handleUpdateLetter = (letter: OfficialLetterModel) => {
-    setOfficialLetters((prev) =>
-      prev.map((l) => (l.id === letter.id ? letter : l))
-    );
-  };
-
   // Module Title Lookup
   const moduleTitles: Record<ModuleType, string> = {
     dashboard: 'Visão Geral & Métricas',
@@ -562,6 +552,7 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
     bd_discursos: 'Comunicação · Discursos',
     clipping: 'Comunicação · Clipping',
     bd_importar: 'Banco de Dados · Importação',
+    bd_conhecimento: 'Banco de Dados · Base de Conhecimento',
   };
 
   // WhatsApp: conversas não lidas no menu (o módulo atualiza mais rápido enquanto aberto).
@@ -605,6 +596,7 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
           setContactsFilter({});
           setCategoriasTab('categorias');
           setAtendimentoTab('todos');
+          setFocusLetterId(null);
           setCurrentModule(mod);
           setMobileMenuOpen(false);
         }}
@@ -769,9 +761,10 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
 
           {currentModule === 'legislativo_oficios' && (
             <OficiosModule
-              letters={officialLetters}
-              onCreateLetter={handleCreateLetter}
-              onUpdateLetter={handleUpdateLetter}
+              cabinet={activeCabinet}
+              logoUrl={customLogoUrl}
+              focusId={focusLetterId}
+              onOpenKnowledge={() => setCurrentModule('bd_conhecimento')}
             />
           )}
 
@@ -805,6 +798,17 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
           )}
 
           {currentModule === 'bd_discursos' && <DiscursosModule canManage={canManageDb} />}
+
+          {currentModule === 'bd_conhecimento' && (
+            <ConhecimentoModule
+              onOpenSource={(source, id) => {
+                if (source === 'oficio') {
+                  setFocusLetterId(id);
+                  setCurrentModule('legislativo_oficios');
+                }
+              }}
+            />
+          )}
 
           {currentModule === 'bd_importar' && (
             <ImportarModule
