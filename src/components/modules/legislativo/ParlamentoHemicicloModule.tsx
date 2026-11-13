@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Landmark,
   Vote,
@@ -30,6 +30,12 @@ import {
   Crown,
   Eye,
   Flame,
+  RefreshCw,
+  ExternalLink,
+  Loader2,
+  Database,
+  Trash2,
+  Undo2,
 } from 'lucide-react';
 import {
   Parliamentarian,
@@ -39,15 +45,46 @@ import {
 import { useDialog } from '../../common/Dialogs';
 import { HemicycleChart, type HemicycleGroup } from './HemicycleChart';
 import { UFS, type ChamberConfig } from '../../../lib/chamber';
+import { usePlenario, formatSyncedAt } from '../../../lib/plenario';
 
 interface ParlamentoHemicicloModuleProps {
   /** Casa legislativa do gabinete (esfera, nº de cadeiras, quóruns, nomenclatura). */
   chamber: ChamberConfig;
-  parliamentarians: Parliamentarian[];
-  votingSessions: VotingSession[];
-  onAddParliamentarian: (p: Parliamentarian) => void;
-  onUpdateParliamentarian: (p: Parliamentarian) => void;
-  onSaveVotingSession: (session: VotingSession) => void;
+}
+
+const EMPTY_MEMBERS: Parliamentarian[] = [];
+const EMPTY_SESSIONS: VotingSession[] = [];
+const SESSIONS_PAGE = 60;
+
+/** Foto oficial do parlamentar, com as iniciais como alternativa. */
+function MemberPhoto({ p, size, ring, mandate }: { p: Parliamentarian; size: number; ring?: string; mandate?: boolean }) {
+  const [failed, setFailed] = useState(false);
+  const initials = p.popularName
+    .split(/\s+/)
+    .filter((w) => w.length > 2 || /^[A-Z]/.test(w))
+    .slice(0, 2)
+    .map((w) => w[0])
+    .join('')
+    .toUpperCase();
+  return (
+    <div
+      className="rounded-2xl overflow-hidden flex items-center justify-center font-bold font-mono shrink-0 shadow-md border-2"
+      style={{
+        width: size,
+        height: size,
+        fontSize: size / 3,
+        backgroundColor: mandate ? '#102C45' : '#F8FAFC',
+        color: mandate ? '#36B7A5' : '#102C45',
+        borderColor: mandate ? '#36B7A5' : ring ?? '#e2e8f0',
+      }}
+    >
+      {p.photoUrl && !failed ? (
+        <img src={p.photoUrl} alt={p.popularName} loading="lazy" className="w-full h-full object-cover object-top" onError={() => setFailed(true)} />
+      ) : (
+        initials || '?'
+      )}
+    </div>
+  );
 }
 
 type ChamberViewMode = 'partidos' | 'blocos' | 'alinhamento' | 'votacao';
@@ -90,17 +127,49 @@ export function voteOutcome(votes: Record<string, VoteChoice>, quorumType: Votin
   return { sim, nao, abst, present, approved, rule };
 }
 
-export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps> = ({
-  chamber,
-  parliamentarians,
-  votingSessions,
-  onAddParliamentarian,
-  onUpdateParliamentarian,
-  onSaveVotingSession,
-}) => {
+export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps> = ({ chamber }) => {
   const dialog = useDialog();
+  const plen = usePlenario();
+  const house = plen.state?.house;
+  const parliamentarians = plen.state?.members ?? EMPTY_MEMBERS;
+  const baseSessions = plen.state?.sessions ?? EMPTY_SESSIONS;
+  const mandateId = plen.state?.mandateMemberId ?? null;
+  const byMandate = plen.state?.alignmentBasis === 'mandato';
+  // Votações com os votos nominais já carregados (as oficiais chegam sem os votos; carregam ao abrir).
+  const votingSessions = useMemo(
+    () =>
+      baseSessions.map((s) => {
+        const v = plen.votes[s.id];
+        return v ? { ...s, votes: v.votes, matterTitle: v.matterTitle || s.matterTitle, summary: v.summary || s.summary } : s;
+      }),
+    [baseSessions, plen.votes]
+  );
+  const [busy, setBusy] = useState(false);
+  /** Executa uma alteração no servidor mostrando o erro, se houver. */
+  const run = async (fn: () => Promise<unknown>, errTitle = 'Não foi possível salvar') => {
+    setBusy(true);
+    try {
+      await fn();
+      return true;
+    } catch (e: any) {
+      dialog.alert({ title: errTitle, message: e?.message ?? String(e), tone: 'warning' });
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
   const [activeTab, setActiveTab] = useState<'composicao' | 'votacoes' | 'estrategia'>('composicao');
-  const [selectedDeputy, setSelectedDeputy] = useState<Parliamentarian | null>(parliamentarians[0] || null);
+  const [selectedDeputyId, setSelectedDeputyId] = useState<string | null>(null);
+  const selectedDeputy = parliamentarians.find((p) => p.id === selectedDeputyId) ?? null;
+  const setSelectedDeputy = (p: Parliamentarian | null) => setSelectedDeputyId(p?.id ?? null);
+  useEffect(() => {
+    if (!selectedDeputy && parliamentarians.length) setSelectedDeputyId(mandateId ?? parliamentarians[0]!.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [parliamentarians, mandateId]);
+  const [sessionSearch, setSessionSearch] = useState('');
+  const [sessionTheme, setSessionTheme] = useState('todos');
+  const [sessionLimit, setSessionLimit] = useState(SESSIONS_PAGE);
+  const [noteDraft, setNoteDraft] = useState<string | null>(null);
   const [filterBloc, setFilterBloc] = useState<string>('todos');
   const [filterParty, setFilterParty] = useState<string>('todos');
   const [searchDeputy, setSearchDeputy] = useState<string>('');
@@ -126,7 +195,38 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
   /** Cadeira sugerida ao cadastrar (clique numa cadeira vazia do plenário). */
   const [newSeatDefault, setNewSeatDefault] = useState<number | null>(null);
   const [newVoteModalOpen, setNewVoteModalOpen] = useState(false);
-  const [inspectVoteSession, setInspectVoteSession] = useState<VotingSession | null>(votingSessions[0] || null);
+  const [inspectId, setInspectId] = useState<string | null>(null);
+  const inspectVoteSession = votingSessions.find((s) => s.id === inspectId) ?? votingSessions[0] ?? null;
+  const setInspectVoteSession = (s: VotingSession | null) => {
+    setInspectId(s?.id ?? null);
+    setNoteDraft(null);
+  };
+  const inspectLoaded = !inspectVoteSession || inspectVoteSession.source === 'gabinete' || !!plen.votes[inspectVoteSession.id];
+  useEffect(() => {
+    if (inspectVoteSession && !inspectLoaded) {
+      plen.loadVotes(inspectVoteSession.id).catch((e) => dialog.alert({ title: 'Votos indisponíveis', message: e.message, tone: 'warning' }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inspectVoteSession?.id, inspectLoaded]);
+  /** Placar da votação: o do servidor (entre os parlamentares em exercício) ou contado dos votos. */
+  const tallyOf = (s: VotingSession) => {
+    if (s.tally) return s.tally;
+    const t = { sim: 0, nao: 0, abstencao: 0, obstrucao: 0, ausente: 0 };
+    parliamentarians.forEach((p) => {
+      const v = s.votes[p.id];
+      if (v === 'sim' || v === 'nao' || v === 'abstencao') t[v]++;
+      else t.ausente++;
+    });
+    return t;
+  };
+  const filteredSessions = useMemo(() => {
+    const q = sessionSearch.trim().toLowerCase();
+    return votingSessions.filter(
+      (s) =>
+        (sessionTheme === 'todos' || s.theme === sessionTheme) &&
+        (!q || `${s.matterCode} ${s.matterTitle} ${s.summary}`.toLowerCase().includes(q))
+    );
+  }, [votingSessions, sessionSearch, sessionTheme]);
 
   // Strategy theme selector
   const [selectedThemeStrategy, setSelectedThemeStrategy] = useState<string>('Todos os Temas');
@@ -218,7 +318,7 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
     });
 
     setNewVoteForm({
-      matterCode: `PL ${Math.floor(Math.random() * 400 + 100)}/2026`,
+      matterCode: '',
       matterTitle: '',
       theme: 'Saúde',
       quorumType: 'Maioria Simples',
@@ -263,7 +363,7 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
     });
   };
 
-  const handleSaveVotingSessionSubmit = (e: React.FormEvent) => {
+  const handleSaveVotingSessionSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newVoteForm.matterCode || !newVoteForm.matterTitle) {
       dialog.alert({ title: 'Campos obrigatórios', message: 'Preencha o número e o título da matéria.', tone: 'warning' });
@@ -274,23 +374,26 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
     const simCount = outcome.sim;
     const isApproved = outcome.approved;
 
-    const newSession: VotingSession = {
-      id: `vot-${Date.now()}`,
-      matterCode: newVoteForm.matterCode,
-      matterTitle: newVoteForm.matterTitle,
-      theme: newVoteForm.theme,
-      date: newVoteForm.date,
-      sessionNumber: `${Math.floor(Math.random() * 20 + 35)}ª Sessão Ordinária`,
-      quorumType: newVoteForm.quorumType,
-      mandateVote: newVoteForm.mandateVote,
-      result: isApproved ? 'Aprovado' : 'Rejeitado',
-      votes: newVoteForm.votes,
-      summary: `Votação concluída com ${simCount} votos favoráveis, ${outcome.nao} contrários e ${outcome.abst} abstenções (${newVoteForm.quorumType}: ${outcome.rule}). Matéria ${isApproved ? 'aprovada' : 'rejeitada'}.`,
-      strategicNote: newVoteForm.strategicNote || 'Registro nominal efetuado pelo Gabinete Conectado.',
-    };
-
-    onSaveVotingSession(newSession);
-    setInspectVoteSession(newSession);
+    // O voto do parlamentar do mandato, quando definido, segue o que foi marcado para ele na lista.
+    const votes = { ...newVoteForm.votes };
+    if (mandateId) votes[mandateId] = newVoteForm.mandateVote;
+    let newId = '';
+    const ok = await run(async () => {
+      newId = await plen.addSession({
+        matterCode: newVoteForm.matterCode,
+        matterTitle: newVoteForm.matterTitle,
+        theme: newVoteForm.theme,
+        date: newVoteForm.date,
+        quorumType: newVoteForm.quorumType,
+        mandateVote: newVoteForm.mandateVote,
+        result: isApproved ? 'Aprovado' : 'Rejeitado',
+        votes,
+        summary: `Votação concluída com ${simCount} votos favoráveis, ${outcome.nao} contrários e ${outcome.abst} abstenções (${newVoteForm.quorumType}: ${outcome.rule}). Matéria ${isApproved ? 'aprovada' : 'rejeitada'}.`,
+        strategicNote: newVoteForm.strategicNote || undefined,
+      });
+    });
+    if (!ok) return;
+    setInspectId(newId);
     setNewVoteModalOpen(false);
   };
 
@@ -304,6 +407,7 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
     'Tributário & Orçamento',
     'Segurança Pública',
     'Servidores Públicos',
+    'Outros',
   ];
 
   const strategicThemeData = useMemo(() => {
@@ -315,14 +419,16 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
       return {
         ...dep,
         effectiveScore: score,
+        hasData: dep.alignmentSample !== 0,
       };
-    }).sort((a, b) => b.effectiveScore - a.effectiveScore);
+    }).sort((a, b) => Number(b.hasData) - Number(a.hasData) || b.effectiveScore - a.effectiveScore);
   }, [parliamentarians, selectedThemeStrategy]);
 
   // Cohesion by party
   const partyCohesion = useMemo(() => {
     const groups: Record<string, { totalScore: number; count: number; color: string; deputies: string[] }> = {};
     parliamentarians.forEach((dep) => {
+      if (dep.alignmentSample === 0) return; // sem votações nominais: não entra na média
       let score = dep.alignmentScore;
       if (selectedThemeStrategy !== 'Todos os Temas' && dep.themeAlignments) {
         score = dep.themeAlignments[selectedThemeStrategy] ?? dep.alignmentScore;
@@ -424,31 +530,45 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
         ['d', 'Divergente (abaixo de 50%)', BAD, (s) => s < 50],
       ];
       return {
-        heading: 'Fidelidade ao mandato',
-        groups: def.map(([key, label, color, test]) => ({
-          key,
-          label,
-          color,
-          members: parliamentarians.filter((p) => test(p.alignmentScore)).sort((a, b) => b.alignmentScore - a.alignmentScore),
-        })),
+        heading: byMandate ? 'Alinhamento com o mandato' : 'Alinhamento com a maioria',
+        groups: [
+          ...def.map(([key, label, color, test]) => ({
+            key,
+            label,
+            color,
+            members: parliamentarians
+              .filter((p) => p.alignmentSample !== 0 && test(p.alignmentScore))
+              .sort((a, b) => b.alignmentScore - a.alignmentScore),
+          })),
+          {
+            key: 'sem-dados',
+            label: 'Sem votações nominais',
+            color: NEUTRAL_GRAY,
+            hollow: true,
+            members: parliamentarians.filter((p) => p.alignmentSample === 0).sort((a, b) => a.seatNumber - b.seatNumber),
+          },
+        ].filter((g) => g.members.length || g.key !== 'sem-dados'),
       };
     }
-    const vote = (p: Parliamentarian) => inspectVoteSession?.votes[p.id] ?? 'ausente';
+    const vote = (p: Parliamentarian): string => inspectVoteSession?.votes[p.id] ?? 'ausente';
     const def: [string, string, string, boolean][] = [
       ['sim', 'Sim', GOOD, false],
       ['abstencao', 'Abstenção', NEUTRAL_GRAY, false],
-      ['ausente', 'Ausente', NEUTRAL_GRAY, true],
+      ['ausente', inspectLoaded ? 'Ausente / não votou' : 'Carregando votos…', NEUTRAL_GRAY, true],
+      ['obstrucao', 'Obstrução', BAD_LIGHT, false],
       ['nao', 'Não', BAD, false],
     ];
     return {
       heading: 'Voto',
-      groups: def.map(([key, label, color, hollow]) => ({
-        key,
-        label,
-        color,
-        hollow,
-        members: parliamentarians.filter((p) => vote(p) === key).sort(bySeat),
-      })),
+      groups: def
+        .map(([key, label, color, hollow]) => ({
+          key,
+          label,
+          color,
+          hollow,
+          members: parliamentarians.filter((p) => vote(p) === key).sort(bySeat),
+        }))
+        .filter((g) => g.key !== 'obstrucao' || g.members.length),
     };
   }
 
@@ -536,6 +656,120 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
         </div>
       </div>
 
+      {/* Fonte dos dados, situação da importação e parlamentar do mandato */}
+      <div className="bg-white border border-slate-200 rounded-xl px-4 py-3 shadow-xs flex flex-col lg:flex-row lg:items-center justify-between gap-3 text-xs">
+        <div className="flex items-start gap-2.5 min-w-0">
+          <Database className="w-4 h-4 text-[#176B80] shrink-0 mt-0.5" />
+          <div className="min-w-0 space-y-0.5">
+            {plen.loading && !plen.state ? (
+              <p className="text-slate-500 flex items-center gap-1.5">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" /> Carregando dados da {chamber.houseShort}…
+              </p>
+            ) : plen.error && !plen.state ? (
+              <p className="text-rose-700">{plen.error}</p>
+            ) : house ? (
+              <>
+                <p className="text-slate-700">
+                  <strong className="text-slate-900">{house.legislature || 'Legislatura atual'}</strong>
+                  {house.sources.length > 0 && (
+                    <>
+                      {' · Fonte: '}
+                      {house.sources.map((src, i) => (
+                        <span key={src.url}>
+                          {i > 0 && ' + '}
+                          <a href={src.url} target="_blank" rel="noreferrer" className="text-[#176B80] hover:underline" title={src.scope}>
+                            {src.name}
+                          </a>
+                        </span>
+                      ))}
+                    </>
+                  )}
+                  {house.syncedAt && house.status !== 'syncing' && <span className="text-slate-500"> · atualizado em {formatSyncedAt(house.syncedAt)}</span>}
+                </p>
+                {house.status === 'syncing' && (
+                  <p className="text-[#176B80] flex items-center gap-1.5">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    {house.progress || 'Importando dados oficiais…'}
+                    {!house.syncedAt && ' A primeira importação pode levar alguns minutos.'}
+                  </p>
+                )}
+                {house.status === 'error' && (
+                  <p className="text-rose-700">
+                    Falha na última importação: {house.error}
+                    {house.syncedAt ? ' Exibindo os dados anteriores.' : ''}
+                  </p>
+                )}
+                {house.warnings.map((w) => (
+                  <p key={w} className="text-amber-700">
+                    {w}
+                  </p>
+                ))}
+                {house.sources
+                  .filter((src) => /ajustad/i.test(src.scope))
+                  .map((src) => (
+                    <p key={`n-${src.url}`} className="text-slate-500">
+                      {src.scope}
+                    </p>
+                  ))}
+                {(plen.state?.hiddenMembers.length ?? 0) > 0 && (
+                  <p className="text-slate-500">
+                    Retirados da composição pelo gabinete:{' '}
+                    {plen.state!.hiddenMembers.map((h, i) => (
+                      <span key={h.id}>
+                        {i > 0 && ', '}
+                        {h.popularName} ({h.party}){' '}
+                        <button className="text-[#176B80] hover:underline" disabled={busy} onClick={() => run(() => plen.resetMember(h.id))}>
+                          restaurar
+                        </button>
+                      </span>
+                    ))}
+                  </p>
+                )}
+                {chamber.sphere !== 'federal' && baseSessions.every((x) => x.source !== 'oficial') && house.status === 'ok' && (
+                  <p className="text-slate-500">
+                    Esta casa não publica votações nominais em formato aberto
+                    {house.sources.some((src) => src.name.startsWith('SAPL')) ? ' no SAPL' : ''}. Registre as votações em “Registrar Votação”.
+                  </p>
+                )}
+              </>
+            ) : null}
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          {parliamentarians.length > 0 && (
+            <label className="flex items-center gap-1.5 text-slate-600">
+              <span className="whitespace-nowrap">Mandato do gabinete:</span>
+              <select
+                value={mandateId ?? ''}
+                disabled={busy}
+                onChange={(e) => run(() => plen.setMandate(e.target.value || null))}
+                className="max-w-[220px] px-2 py-1 bg-white border border-slate-200 rounded-md text-[11px] text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-[#176B80]"
+                title="Referência para o alinhamento de cada parlamentar"
+              >
+                <option value="">Não definido (alinhamento com a maioria)</option>
+                {[...parliamentarians]
+                  .sort((a, b) => a.popularName.localeCompare(b.popularName))
+                  .map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.popularName} ({p.party}
+                      {chamber.groupsByUf && p.uf ? `/${p.uf}` : ''})
+                    </option>
+                  ))}
+              </select>
+            </label>
+          )}
+          <button
+            onClick={() => run(() => plen.sync(), 'Não foi possível atualizar')}
+            disabled={busy || house?.status === 'syncing'}
+            className="px-2.5 py-1 font-medium text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-lg flex items-center gap-1.5 disabled:opacity-50"
+            title="Buscar de novo os dados oficiais da casa"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${house?.status === 'syncing' ? 'animate-spin' : ''}`} />
+            Atualizar dados
+          </button>
+        </div>
+      </div>
+
       {/* ============================================================ */}
       {/* TAB 1: COMPOSIÇÃO PLENÁRIO (LAYOUT ELEVADO & EXECUTIVO)      */}
       {/* ============================================================ */}
@@ -550,7 +784,7 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
                   <div>
                     <h2 className="text-sm font-bold text-slate-900">Composição do Plenário · {chamber.houseShort}</h2>
                     <p className="text-[11px] text-slate-500">
-                      {chamber.house} · {chamber.seats} cadeiras · {registered} {registered === 1 ? 'parlamentar cadastrado' : 'parlamentares cadastrados'}
+                      {chamber.house} · {chamber.seats} cadeiras · {registered} {registered === 1 ? "parlamentar em exercício" : "parlamentares em exercício"}
                       {vacantCount > 0 && <span className="text-amber-700"> · {vacantCount} a cadastrar</span>}
                     </p>
                   </div>
@@ -573,7 +807,7 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
                     [
                       ['partidos', 'Partidos'],
                       ['blocos', 'Blocos Políticos'],
-                      ['alinhamento', 'Fidelidade ao Mandato'],
+                      ['alinhamento', byMandate ? 'Alinhamento ao Mandato' : 'Alinhamento à Maioria'],
                       ['votacao', `Placar ${inspectVoteSession?.matterCode ?? 'da Sessão'}`],
                     ] as const
                   ).map(([mode, label]) => (
@@ -603,7 +837,7 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
                   groupHeading={chamberGroups.heading}
                   showNote={chamberGroups.note}
                   selectedId={selectedDeputy?.id}
-                  mandateId="dep-01"
+                  mandateId={mandateId ?? undefined}
                   isDimmed={(p) => (isVacant(p) ? filterBloc !== 'todos' || filterParty !== 'todos' || filterUf !== 'todos' : !filteredIds.has(p.id))}
                   onSelect={(p) => {
                     if (isVacant(p)) {
@@ -678,16 +912,13 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
                 {/* Header Profile Ribbon */}
                 <div className="flex items-start justify-between">
                   <div className="flex items-center gap-3">
-                    <div
-                      className="w-14 h-14 rounded-2xl flex items-center justify-center font-bold font-mono text-xl shrink-0 shadow-md border-2"
-                      style={{
-                        backgroundColor: selectedDeputy.id === 'dep-01' ? '#102C45' : '#F8FAFC',
-                        color: selectedDeputy.id === 'dep-01' ? '#36B7A5' : '#102C45',
-                        borderColor: selectedDeputy.id === 'dep-01' ? '#36B7A5' : partyColor(selectedDeputy.party),
-                      }}
-                    >
-                      {selectedDeputy.avatar || selectedDeputy.name.slice(0, 2).toUpperCase()}
-                    </div>
+                    <MemberPhoto
+                      key={selectedDeputy.id}
+                      p={selectedDeputy}
+                      size={64}
+                      ring={partyColor(selectedDeputy.party)}
+                      mandate={selectedDeputy.id === mandateId}
+                    />
                     <div>
                       <div className="flex items-center gap-1.5">
                         <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-800 border border-slate-200">
@@ -708,7 +939,16 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
                       <h3 className="text-base font-bold text-slate-900 mt-1 leading-snug">
                         {selectedDeputy.popularName}
                       </h3>
-                      <p className="text-xs text-slate-500">{selectedDeputy.name}</p>
+                      {selectedDeputy.name !== selectedDeputy.popularName && <p className="text-xs text-slate-500">{selectedDeputy.name}</p>}
+                      <p className="text-[10px] text-slate-400">
+                        {[
+                          selectedDeputy.status,
+                          selectedDeputy.source === 'gabinete' ? 'Cadastrado pelo gabinete' : selectedDeputy.adjusted ? 'Dados oficiais com ajustes do gabinete' : null,
+                          selectedDeputy.id === mandateId ? 'Mandato do gabinete' : null,
+                        ]
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </p>
                     </div>
                   </div>
 
@@ -748,8 +988,27 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
                       Função na {chamber.sphere === 'municipal' ? 'Câmara' : chamber.sphere === 'federal' ? 'Câmara' : 'Assembleia'}
                     </span>
                     <span className="font-medium text-slate-700 mt-0.5 block">
-                      {selectedDeputy.role || `${chamber.memberTitle} titular`}
+                      {selectedDeputy.role || chamber.memberTitle}
                     </span>
+                  </div>
+                  {(selectedDeputy.email || selectedDeputy.phone) && (
+                    <div className="col-span-2 pt-2 border-t border-slate-200 space-y-0.5">
+                      <span className="text-[10px] font-bold uppercase text-slate-400 block tracking-wider">Contato</span>
+                      {selectedDeputy.email && (
+                        <a href={`mailto:${selectedDeputy.email}`} className="block text-[#176B80] hover:underline truncate">
+                          {selectedDeputy.email}
+                        </a>
+                      )}
+                      {selectedDeputy.phone && <span className="block text-slate-700">{selectedDeputy.phone}</span>}
+                    </div>
+                  )}
+                  <div className="col-span-2 pt-2 border-t border-slate-200 text-[11px] text-slate-500">
+                    Bloco{' '}
+                    {selectedDeputy.blocSource === 'governo'
+                      ? `calculado pela orientação do Governo: votou com ela em ${selectedDeputy.govAlignment}% das votações nominais.`
+                      : selectedDeputy.blocSource === 'gabinete'
+                        ? 'definido pelo gabinete.'
+                        : 'ainda não definido. Ajuste em “Editar”.'}
                   </div>
                 </div>
 
@@ -758,10 +1017,10 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
                   <div className="flex items-center justify-between text-xs">
                     <span className="font-bold text-slate-800 flex items-center gap-1.5">
                       <TrendingUp className="w-4 h-4 text-[#176B80]" />
-                      Alinhamento Global com nosso Mandato
+                      {byMandate ? 'Alinhamento com nosso Mandato' : 'Alinhamento com a maioria do plenário'}
                     </span>
                     <span className="font-mono font-bold text-slate-900 text-sm">
-                      {selectedDeputy.alignmentScore}%
+                      {selectedDeputy.alignmentSample === 0 ? '—' : `${selectedDeputy.alignmentScore}%`}
                     </span>
                   </div>
                   <div className="w-full bg-slate-200 h-2.5 rounded-full overflow-hidden">
@@ -777,11 +1036,13 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
                     />
                   </div>
                   <p className="text-[11px] text-slate-500 pt-1 leading-relaxed">
-                    {selectedDeputy.alignmentScore >= 80
-                      ? 'Aliado consistente em matérias de infraestrutura, saúde e desenvolvimento regional.'
-                      : selectedDeputy.alignmentScore >= 60
-                      ? 'Parlamentar de centro: decide caso a caso conforme a articulação política e emendas.'
-                      : 'Posicionamento oposicionista sistemático, exceto em pautas de consenso ético e servidores.'}
+                    {selectedDeputy.id === mandateId
+                      ? `Parlamentar do mandato: referência para o alinhamento dos demais (${selectedDeputy.alignmentSample ?? 0} votações nominais com voto registrado).`
+                      : selectedDeputy.alignmentSample
+                        ? `Votou igual ${byMandate ? 'ao mandato' : 'à maioria'} em ${Math.round((selectedDeputy.alignmentScore * selectedDeputy.alignmentSample) / 100)} de ${selectedDeputy.alignmentSample} votações nominais em que ambos votaram Sim ou Não.${
+                            byMandate ? '' : ' Defina o “Mandato do gabinete” acima para medir o alinhamento com o seu parlamentar.'
+                          }`
+                        : 'Sem votações nominais com voto deste parlamentar nesta legislatura.'}
                   </p>
                 </div>
 
@@ -790,7 +1051,7 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
                   <div className="space-y-2">
                     <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center justify-between">
                       <span>Fidelidade por Assunto</span>
-                      <span className="text-[10px] text-slate-400 font-normal">7 temas</span>
+                      <span className="text-[10px] text-slate-400 font-normal">temas com 3+ votações</span>
                     </h4>
                     <div className="space-y-1.5 text-xs">
                       {Object.entries(selectedDeputy.themeAlignments).map(([theme, score]) => (
@@ -851,7 +1112,7 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
             <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
               <div className="flex items-center justify-between mb-2">
                 <h4 className="text-xs font-bold text-slate-800">
-                  Parlamentares cadastrados ({filteredDeputies.length}/{chamber.seats})
+                  Parlamentares em exercício ({filteredDeputies.length}/{chamber.seats})
                 </h4>
                 <div className="relative">
                   <input
@@ -904,7 +1165,8 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
             <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs">
               <div className="flex items-center justify-between mb-3">
                 <h3 className="text-sm font-bold text-slate-900">
-                  Histórico de Votações Nominais ({votingSessions.length})
+                  Votações Nominais ({filteredSessions.length}
+                  {filteredSessions.length !== votingSessions.length ? ` de ${votingSessions.length}` : ''})
                 </h3>
                 <button
                   onClick={handleOpenNewVote}
@@ -915,11 +1177,52 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
                 </button>
               </div>
 
-              <div className="space-y-2">
-                {votingSessions.map((session) => {
+              <div className="flex gap-2 mb-3">
+                <div className="relative flex-1">
+                  <input
+                    type="text"
+                    placeholder="Buscar matéria, número ou assunto…"
+                    value={sessionSearch}
+                    onChange={(e) => {
+                      setSessionSearch(e.target.value);
+                      setSessionLimit(SESSIONS_PAGE);
+                    }}
+                    className="w-full text-xs bg-slate-50 border border-slate-200 rounded-md px-2 py-1.5 pl-7 text-slate-800 focus:outline-none"
+                  />
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2 top-2" />
+                </div>
+                <select
+                  value={sessionTheme}
+                  onChange={(e) => {
+                    setSessionTheme(e.target.value);
+                    setSessionLimit(SESSIONS_PAGE);
+                  }}
+                  className="text-xs bg-slate-50 border border-slate-200 rounded-md px-2 py-1.5 text-slate-800"
+                  aria-label="Tema"
+                >
+                  <option value="todos">Todos os temas</option>
+                  {themesList.slice(1).map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {votingSessions.length === 0 && (
+                <p className="text-xs text-slate-500 py-6 text-center">
+                  {house?.status === 'syncing'
+                    ? 'Importando as votações nominais…'
+                    : 'Nenhuma votação nominal registrada nesta legislatura. Use “Nova Votação” para registrar.'}
+                </p>
+              )}
+
+              <div className="space-y-2 max-h-[640px] overflow-y-auto pr-1">
+                {filteredSessions.slice(0, sessionLimit).map((session) => {
                   const isSelected = inspectVoteSession?.id === session.id;
-                  const simVotes = Object.values(session.votes).filter((v) => v === 'sim').length;
-                  const naoVotes = Object.values(session.votes).filter((v) => v === 'nao').length;
+                  const tl = tallyOf(session);
+                  const simVotes = tl.sim;
+                  const naoVotes = tl.nao + tl.obstrucao;
 
                   return (
                     <div
@@ -936,7 +1239,7 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
                           {session.matterCode}
                         </span>
                         <div className="flex items-center gap-2">
-                          <span className="text-[11px] text-slate-500">{session.date}</span>
+                          <span className="text-[11px] text-slate-500">{session.date.split('-').reverse().join('/')}</span>
                           <span
                             className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
                               session.result === 'Aprovado'
@@ -949,13 +1252,22 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
                         </div>
                       </div>
 
-                      <h4 className="text-xs font-bold text-slate-800 line-clamp-2 mb-1.5">
+                      <h4 className="text-xs font-bold text-slate-800 line-clamp-2 mb-1">
                         {session.matterTitle}
                       </h4>
+                      {session.source === 'oficial' && session.summary && session.summary !== session.matterTitle && (
+                        <p className="text-[11px] text-slate-500 line-clamp-1 mb-1.5">{session.summary}</p>
+                      )}
 
                       <div className="flex items-center justify-between text-[11px] text-slate-500">
-                        <span className="px-1.5 py-0.2 bg-slate-100 rounded text-slate-600 font-medium">
-                          {session.theme}
+                        <span className="flex items-center gap-1.5">
+                          <span className="px-1.5 py-0.2 bg-slate-100 rounded text-slate-600 font-medium">{session.theme}</span>
+                          {session.source === 'gabinete' && <span className="px-1.5 py-0.2 bg-indigo-50 text-indigo-700 rounded font-medium">Gabinete</span>}
+                          {mandateId && session.mandateVote !== 'ausente' && (
+                            <span className="text-slate-500">
+                              Mandato: <strong className="text-slate-700">{session.mandateVote === 'sim' ? 'Sim' : session.mandateVote === 'nao' ? 'Não' : 'Abst.'}</strong>
+                            </span>
+                          )}
                         </span>
                         <div className="flex items-center gap-2 font-mono">
                           <span className="text-emerald-700 font-bold">{simVotes} SIM</span>
@@ -966,6 +1278,14 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
                     </div>
                   );
                 })}
+                {filteredSessions.length > sessionLimit && (
+                  <button
+                    onClick={() => setSessionLimit((n) => n + SESSIONS_PAGE)}
+                    className="w-full py-2 text-xs font-medium text-[#176B80] bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg"
+                  >
+                    Mostrar mais ({filteredSessions.length - sessionLimit} restantes)
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -997,12 +1317,62 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
                   <h3 className="text-base font-bold text-slate-900 leading-snug">
                     {inspectVoteSession.matterTitle}
                   </h3>
-                  <div className="flex items-center gap-3 text-xs text-slate-500 mt-2">
-                    <span>Tema: <strong className="text-slate-700">{inspectVoteSession.theme}</strong></span>
+                  {inspectVoteSession.summary && inspectVoteSession.summary !== inspectVoteSession.matterTitle && (
+                    <p className="text-xs text-slate-600 mt-1.5 leading-relaxed">{inspectVoteSession.summary}</p>
+                  )}
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500 mt-2">
+                    <span>
+                      Tema:{' '}
+                      <select
+                        value={inspectVoteSession.theme}
+                        disabled={busy}
+                        onChange={(e) => run(() => plen.patchSession(inspectVoteSession.id, { theme: e.target.value as VotingSession['theme'] }))}
+                        className="font-semibold text-slate-700 bg-transparent border-b border-dashed border-slate-300 focus:outline-none"
+                        title="Corrigir o tema desta votação"
+                      >
+                        {themesList.slice(1).map((t) => (
+                          <option key={t} value={t}>
+                            {t}
+                          </option>
+                        ))}
+                      </select>
+                    </span>
                     <span>·</span>
-                    <span>Quórum Exigido: <strong className="text-slate-700">{inspectVoteSession.quorumType}</strong></span>
+                    <span>Quórum: <strong className="text-slate-700">{inspectVoteSession.quorumType}</strong></span>
                     <span>·</span>
-                    <span>Data: <strong className="text-slate-700">{inspectVoteSession.date}</strong></span>
+                    <span>Data: <strong className="text-slate-700">{inspectVoteSession.date.split('-').reverse().join('/')}</strong></span>
+                    {inspectVoteSession.gov && (
+                      <>
+                        <span>·</span>
+                        <span>
+                          Orientação do Governo:{' '}
+                          <strong className="text-slate-700">
+                            {{ sim: 'Sim', nao: 'Não', abstencao: 'Abstenção', obstrucao: 'Obstrução', liberado: 'Liberado' }[inspectVoteSession.gov]}
+                          </strong>
+                        </span>
+                      </>
+                    )}
+                    {inspectVoteSession.url && (
+                      <a href={inspectVoteSession.url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-[#176B80] hover:underline">
+                        <ExternalLink className="w-3 h-3" /> Ver na fonte
+                      </a>
+                    )}
+                    {inspectVoteSession.source === 'gabinete' && (
+                      <button
+                        onClick={async () => {
+                          const ok = await dialog.confirm({
+                            title: 'Excluir votação',
+                            message: `Excluir o registro da votação ${inspectVoteSession.matterCode}?`,
+                            tone: 'danger',
+                            confirmLabel: 'Excluir',
+                          });
+                          if (ok) await run(() => plen.deleteSession(inspectVoteSession.id));
+                        }}
+                        className="flex items-center gap-1 text-rose-700 hover:underline"
+                      >
+                        <Trash2 className="w-3 h-3" /> Excluir registro
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -1011,50 +1381,87 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
                   <div className="bg-emerald-50 border border-emerald-200 p-2.5 rounded-lg">
                     <span className="text-[10px] uppercase font-bold text-emerald-700 block">SIM</span>
                     <span className="text-xl font-bold font-mono text-emerald-900">
-                      {Object.values(inspectVoteSession.votes).filter((v) => v === 'sim').length}
+                      {tallyOf(inspectVoteSession).sim}
                     </span>
                   </div>
                   <div className="bg-rose-50 border border-rose-200 p-2.5 rounded-lg">
-                    <span className="text-[10px] uppercase font-bold text-rose-700 block">NÃO</span>
+                    <span className="text-[10px] uppercase font-bold text-rose-700 block">
+                      NÃO{tallyOf(inspectVoteSession).obstrucao > 0 && ` + ${tallyOf(inspectVoteSession).obstrucao} OBSTR.`}
+                    </span>
                     <span className="text-xl font-bold font-mono text-rose-900">
-                      {Object.values(inspectVoteSession.votes).filter((v) => v === 'nao').length}
+                      {tallyOf(inspectVoteSession).nao}
                     </span>
                   </div>
                   <div className="bg-amber-50 border border-amber-200 p-2.5 rounded-lg">
                     <span className="text-[10px] uppercase font-bold text-amber-700 block">ABSTENÇÃO</span>
                     <span className="text-xl font-bold font-mono text-amber-900">
-                      {Object.values(inspectVoteSession.votes).filter((v) => v === 'abstencao').length}
+                      {tallyOf(inspectVoteSession).abstencao}
                     </span>
                   </div>
                   <div className="bg-slate-50 border border-slate-200 p-2.5 rounded-lg">
                     <span className="text-[10px] uppercase font-bold text-slate-600 block">AUSENTE</span>
                     <span className="text-xl font-bold font-mono text-slate-800">
-                      {Object.values(inspectVoteSession.votes).filter((v) => v === 'ausente').length}
+                      {tallyOf(inspectVoteSession).ausente}
                     </span>
                   </div>
                 </div>
 
-                {/* Strategic note */}
-                {inspectVoteSession.strategicNote && (
-                  <div className="p-3 bg-indigo-50/60 border border-indigo-200/60 rounded-lg text-xs space-y-1">
-                    <span className="font-bold text-indigo-900 flex items-center gap-1.5">
+                {/* Strategic note (editável pelo gabinete) */}
+                <div className="p-3 bg-indigo-50/60 border border-indigo-200/60 rounded-lg text-xs space-y-1.5">
+                  <span className="font-bold text-indigo-900 flex items-center justify-between gap-1.5">
+                    <span className="flex items-center gap-1.5">
                       <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
-                      Análise Estratégica do Gabinete:
+                      Análise Estratégica do Gabinete
                     </span>
-                    <p className="text-indigo-950/80 leading-relaxed">
-                      {inspectVoteSession.strategicNote}
+                    {noteDraft === null && (
+                      <button onClick={() => setNoteDraft(inspectVoteSession.strategicNote ?? '')} className="font-medium text-indigo-700 hover:underline">
+                        {inspectVoteSession.strategicNote ? 'Editar' : 'Escrever análise'}
+                      </button>
+                    )}
+                  </span>
+                  {noteDraft === null ? (
+                    <p className="text-indigo-950/80 leading-relaxed whitespace-pre-line">
+                      {inspectVoteSession.strategicNote || 'Sem análise registrada para esta votação.'}
                     </p>
-                  </div>
-                )}
+                  ) : (
+                    <div className="space-y-1.5">
+                      <textarea
+                        value={noteDraft}
+                        onChange={(e) => setNoteDraft(e.target.value)}
+                        rows={3}
+                        maxLength={2000}
+                        className="w-full border border-indigo-200 rounded-md p-2 text-xs text-slate-800 bg-white"
+                        placeholder="Leitura política do resultado, compromissos, próximos passos…"
+                      />
+                      <div className="flex justify-end gap-2">
+                        <button onClick={() => setNoteDraft(null)} className="px-2 py-1 text-slate-600 hover:underline">
+                          Cancelar
+                        </button>
+                        <button
+                          disabled={busy}
+                          onClick={async () => {
+                            if (await run(() => plen.patchSession(inspectVoteSession.id, { strategicNote: noteDraft }))) setNoteDraft(null);
+                          }}
+                          className="px-2.5 py-1 font-semibold text-white bg-[#102C45] hover:bg-[#176B80] rounded-md disabled:opacity-50"
+                        >
+                          Salvar análise
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
 
                 {/* Detailed Roll Call Grid */}
                 <div>
-                  <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider mb-2">
-                    Votação Nominal · {registered} parlamentares cadastrados de {chamber.seats}
+                  <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider mb-2 flex items-center gap-2">
+                    Votação Nominal · {registered} {chamber.memberPlural} em exercício
+                    {!inspectLoaded && <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-400" />}
                   </h4>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-80 overflow-y-auto pr-1">
-                    {parliamentarians.map((dep) => {
-                      const vote = inspectVoteSession.votes[dep.id] || 'ausente';
+                    {[...parliamentarians]
+                      .sort((a, b) => (a.id === mandateId ? -1 : b.id === mandateId ? 1 : a.popularName.localeCompare(b.popularName)))
+                      .map((dep) => {
+                      const vote: string = inspectVoteSession.votes[dep.id] || 'ausente';
                       let badge = (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono text-[11px] font-bold bg-slate-100 text-slate-600">
                           <MinusCircle className="w-3 h-3 text-slate-400" /> AUS
@@ -1071,6 +1478,12 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
                         badge = (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono text-[11px] font-bold bg-rose-100 text-rose-800">
                             <XCircle className="w-3 h-3 text-rose-600" /> NÃO
+                          </span>
+                        );
+                      } else if (vote === 'obstrucao') {
+                        badge = (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                            <XCircle className="w-3 h-3 text-rose-500" /> OBS
                           </span>
                         );
                       } else if (vote === 'abstencao') {
@@ -1094,7 +1507,9 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
                               </span>
                             </div>
                             <span className="text-[10px] text-slate-500">
-                              {dep.party} · Bloco {dep.bloc}
+                              {dep.party}
+                              {chamber.groupsByUf && dep.uf ? `/${dep.uf}` : ''} · Bloco {dep.bloc}
+                              {dep.id === mandateId ? ' · Mandato' : ''}
                             </span>
                           </div>
                           <div className="shrink-0">{badge}</div>
@@ -1160,6 +1575,12 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
               </div>
 
               <div className="space-y-3">
+                {partyCohesion.length === 0 && (
+                  <p className="text-xs text-slate-500">
+                    Sem votações nominais para medir o alinhamento.{' '}
+                    {chamber.sphere === 'federal' ? '' : 'Registre as votações da casa em “Registrar Votação” para alimentar esta análise.'}
+                  </p>
+                )}
                 {partyCohesion.map((item) => (
                   <div key={item.party} className="space-y-1">
                     <div className="flex items-center justify-between text-xs">
@@ -1238,7 +1659,7 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
                           </span>
                         </div>
                         <span className="text-[11px] text-slate-500">
-                          Base: {dep.electoralBase} · Bloco {dep.bloc}
+                          {[dep.electoralBase && `Base: ${dep.electoralBase}`, chamber.groupsByUf && dep.uf, `Bloco ${dep.bloc}`].filter(Boolean).join(' · ')}
                         </span>
                       </div>
                     </div>
@@ -1246,10 +1667,12 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
                     <div className="flex items-center gap-3">
                       <div className="text-right">
                         <span className="font-mono font-bold text-sm block leading-none">
-                          {dep.effectiveScore}%
+                          {dep.hasData ? `${dep.effectiveScore}%` : '—'}
                         </span>
                         <span className="text-[9px] uppercase font-semibold text-slate-400">
-                          {dep.effectiveScore >= 80
+                          {!dep.hasData
+                            ? 'Sem votações'
+                            : dep.effectiveScore >= 80
                             ? 'Aliado Fiel'
                             : dep.effectiveScore >= 60
                             ? 'Articulável'
@@ -1529,13 +1952,14 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
                 <Users className="w-4 h-4 text-[#176B80]" />
                 Cadastrar Novo Parlamentar
               </h3>
+              <span className="sr-only">Para suplentes em exercício ou quem não consta na fonte oficial.</span>
               <button onClick={() => setNewDeputyModalOpen(false)} className="text-slate-400 hover:text-slate-600">
                 <X className="w-4 h-4" />
               </button>
             </div>
 
             <form
-              onSubmit={(e) => {
+              onSubmit={async (e) => {
                 e.preventDefault();
                 const form = e.currentTarget;
                 const seat = parseInt((form.elements.namedItem('seatNumber') as HTMLInputElement).value, 10);
@@ -1544,22 +1968,21 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
                   dialog.alert({ title: 'Cadeira inválida', message: err, tone: 'warning' });
                   return;
                 }
-                const newDep: Parliamentarian = {
-                  id: `dep-${Date.now()}`,
-                  uf: chamber.groupsByUf ? (form.elements.namedItem('uf') as HTMLSelectElement).value : undefined,
-                  name: (form.elements.namedItem('fullName') as HTMLInputElement).value,
-                  popularName: (form.elements.namedItem('popularName') as HTMLInputElement).value,
-                  party: (form.elements.namedItem('party') as HTMLInputElement).value,
-                  partyColor: '#102C45',
-                  bloc: (form.elements.namedItem('bloc') as HTMLSelectElement).value as any,
-                  seatNumber: parseInt((form.elements.namedItem('seatNumber') as HTMLInputElement).value, 10),
-                  electoralBase: (form.elements.namedItem('base') as HTMLInputElement).value,
-                  role: (form.elements.namedItem('role') as HTMLInputElement).value,
-                  avatar: (form.elements.namedItem('popularName') as HTMLInputElement).value.slice(0, 2).toUpperCase(),
-                  alignmentScore: 75,
-                };
-                onAddParliamentarian(newDep);
-                setSelectedDeputy(newDep);
+                let newId = '';
+                const ok = await run(async () => {
+                  newId = await plen.addMember({
+                    uf: chamber.groupsByUf ? (form.elements.namedItem('uf') as HTMLSelectElement).value : chamber.uf,
+                    name: (form.elements.namedItem('fullName') as HTMLInputElement).value,
+                    popularName: (form.elements.namedItem('popularName') as HTMLInputElement).value,
+                    party: (form.elements.namedItem('party') as HTMLInputElement).value,
+                    bloc: (form.elements.namedItem('bloc') as HTMLSelectElement).value as Parliamentarian['bloc'],
+                    seatNumber: seat,
+                    electoralBase: (form.elements.namedItem('base') as HTMLInputElement).value,
+                    role: (form.elements.namedItem('role') as HTMLInputElement).value,
+                  });
+                });
+                if (!ok) return;
+                setSelectedDeputyId(newId);
                 setNewDeputyModalOpen(false);
               }}
               className="space-y-3 text-xs"
@@ -1686,7 +2109,7 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
             </div>
 
             <form
-              onSubmit={(e) => {
+              onSubmit={async (e) => {
                 e.preventDefault();
                 const form = e.currentTarget;
                 const seat = parseInt((form.elements.namedItem('seatNumber') as HTMLInputElement).value, 10);
@@ -1695,21 +2118,22 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
                   dialog.alert({ title: 'Cadeira inválida', message: err, tone: 'warning' });
                   return;
                 }
-                const updated: Parliamentarian = {
-                  ...selectedDeputy,
-                  ...(chamber.groupsByUf ? { uf: (form.elements.namedItem('uf') as HTMLSelectElement).value } : {}),
-                  popularName: (form.elements.namedItem('popularName') as HTMLInputElement).value,
-                  party: (form.elements.namedItem('party') as HTMLInputElement).value,
-                  bloc: (form.elements.namedItem('bloc') as HTMLSelectElement).value as any,
-                  seatNumber: parseInt((form.elements.namedItem('seatNumber') as HTMLInputElement).value, 10),
-                  electoralBase: (form.elements.namedItem('base') as HTMLInputElement).value,
-                  role: (form.elements.namedItem('role') as HTMLInputElement).value,
-                  phone: (form.elements.namedItem('phone') as HTMLInputElement).value,
-                  email: (form.elements.namedItem('email') as HTMLInputElement).value,
+                const val = (n: string) => (form.elements.namedItem(n) as HTMLInputElement).value;
+                const blocVal = val('bloc');
+                const patch = {
+                  ...(chamber.groupsByUf ? { uf: val('uf') } : {}),
+                  popularName: val('popularName'),
+                  party: val('party'),
+                  // "Automático" devolve o bloco ao cálculo pela orientação do Governo.
+                  bloc: blocVal === 'auto' ? null : (blocVal as Parliamentarian['bloc']),
+                  ...(seat !== selectedDeputy.seatNumber ? { seatNumber: seat } : {}),
+                  electoralBase: val('base'),
+                  role: val('role'),
+                  phone: val('phone'),
+                  email: val('email'),
                 };
-                onUpdateParliamentarian(updated);
-                setSelectedDeputy(updated);
-                setEditModalOpen(false);
+                const ok = await run(() => plen.updateMember(selectedDeputy.id, patch));
+                if (ok) setEditModalOpen(false);
               }}
               className="space-y-3 text-xs"
             >
@@ -1737,9 +2161,12 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
                   <label className="font-semibold text-slate-700 block mb-1">Bloco Político</label>
                   <select
                     name="bloc"
-                    defaultValue={selectedDeputy.bloc}
+                    defaultValue={selectedDeputy.blocSource === 'governo' ? 'auto' : selectedDeputy.bloc}
                     className="w-full border border-slate-300 rounded-lg p-2"
                   >
+                    {selectedDeputy.govAlignment != null && (
+                      <option value="auto">Automático pela orientação do Governo ({selectedDeputy.govAlignment}%)</option>
+                    )}
                     <option value="Governo">Base Governo</option>
                     <option value="Independente">Independente</option>
                     <option value="Oposição">Oposição</option>
@@ -1809,7 +2236,52 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
                 </div>
               </div>
 
-              <div className="pt-3 border-t border-slate-100 flex justify-end gap-2">
+              <div className="pt-3 border-t border-slate-100 flex flex-wrap justify-end gap-2">
+                {selectedDeputy.source === 'gabinete' ? (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!(await dialog.confirm({ title: 'Excluir parlamentar', message: `Excluir o cadastro de ${selectedDeputy.popularName}?`, tone: 'danger', confirmLabel: 'Excluir' }))) return;
+                      if (await run(() => plen.resetMember(selectedDeputy.id))) {
+                        setSelectedDeputyId(null);
+                        setEditModalOpen(false);
+                      }
+                    }}
+                    className="mr-auto px-3 py-1.5 text-rose-700 hover:bg-rose-50 rounded-lg flex items-center gap-1"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" /> Excluir cadastro
+                  </button>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      title="Para quem deixou o exercício (licença, cassação, posse de suplente)"
+                      onClick={async () => {
+                        if (!(await dialog.confirm({ title: 'Retirar da composição', message: `${selectedDeputy.popularName} deixa de aparecer no plenário deste gabinete. Dá para restaurar depois, pelo aviso “Retirados da composição” no topo.`, confirmLabel: 'Retirar' })))
+                          return;
+                        if (await run(() => plen.updateMember(selectedDeputy.id, { hidden: true }))) {
+                          setSelectedDeputyId(null);
+                          setEditModalOpen(false);
+                        }
+                      }}
+                      className="mr-auto px-3 py-1.5 text-rose-700 hover:bg-rose-50 rounded-lg flex items-center gap-1"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" /> Fora do exercício
+                    </button>
+                    {selectedDeputy.adjusted && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (await run(() => plen.resetMember(selectedDeputy.id))) setEditModalOpen(false);
+                        }}
+                        className="px-3 py-1.5 text-slate-700 hover:bg-slate-50 rounded-lg flex items-center gap-1"
+                        title="Voltar aos dados da fonte oficial"
+                      >
+                        <Undo2 className="w-3.5 h-3.5" /> Desfazer ajustes
+                      </button>
+                    )}
+                  </>
+                )}
                 <button
                   type="button"
                   onClick={() => setEditModalOpen(false)}
@@ -1819,7 +2291,8 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-1.5 font-semibold text-white bg-[#102C45] hover:bg-[#176B80] rounded-lg shadow-xs"
+                  disabled={busy}
+                  className="px-4 py-1.5 font-semibold text-white bg-[#102C45] hover:bg-[#176B80] rounded-lg shadow-xs disabled:opacity-50"
                 >
                   Atualizar Dados
                 </button>

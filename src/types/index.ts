@@ -315,21 +315,42 @@ export interface Parliamentarian {
   email?: string;
   alignmentScore: number; // 0 to 100%
   themeAlignments?: Record<string, number>;
+  /** Foto oficial (Câmara, assembleia, SAPL ou TSE). */
+  photoUrl?: string;
+  /** Nº de votações nominais usadas no cálculo do alinhamento (0 = sem dados). */
+  alignmentSample?: number;
+  /** % de votos alinhados à orientação do Governo (Câmara dos Deputados). */
+  govAlignment?: number | null;
+  /** Origem do bloco: definido pelo gabinete, calculado pela orientação do Governo ou padrão. */
+  blocSource?: 'gabinete' | 'governo' | 'padrao';
+  /** Situação na fonte oficial (ex.: "Eleito por QP", "Em exercício"). */
+  status?: string;
+  /** oficial = importado da fonte pública; gabinete = cadastrado à mão. */
+  source?: 'oficial' | 'gabinete';
+  /** Dados oficiais com ajustes do gabinete. */
+  adjusted?: boolean;
 }
 
 export interface VotingSession {
   id: string;
   matterCode: string;
   matterTitle: string;
-  theme: 'Saúde' | 'Infraestrutura' | 'Agricultura & Meio Ambiente' | 'Educação' | 'Tributário & Orçamento' | 'Segurança Pública' | 'Servidores Públicos';
+  theme: 'Saúde' | 'Infraestrutura' | 'Agricultura & Meio Ambiente' | 'Educação' | 'Tributário & Orçamento' | 'Segurança Pública' | 'Servidores Públicos' | 'Outros';
   date: string;
   sessionNumber: string;
   quorumType: 'Maioria Simples' | 'Maioria Absoluta' | 'Três Quintos (3/5)' | 'Dois Terços (2/3)';
   mandateVote: VoteChoice;
   result: 'Aprovado' | 'Rejeitado';
-  votes: Record<string, VoteChoice>; // parliamentarianId -> choice
+  votes: Record<string, VoteChoice>; // parliamentarianId -> choice (votações oficiais: carregado ao abrir)
   summary: string;
   strategicNote?: string;
+  /** oficial = importada da fonte pública; gabinete = registrada à mão. */
+  source?: 'oficial' | 'gabinete';
+  /** Placar entre os parlamentares em exercício (obstrução: Câmara dos Deputados). */
+  tally?: { sim: number; nao: number; abstencao: number; obstrucao: number; ausente: number };
+  /** Orientação do Governo (Câmara dos Deputados). */
+  gov?: 'sim' | 'nao' | 'abstencao' | 'obstrucao' | 'liberado';
+  url?: string;
 }
 
 export interface LegislativeBill {

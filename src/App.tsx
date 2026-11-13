@@ -22,8 +22,6 @@ import {
   ChannelType,
   NewsletterSubscriber,
   NewsletterCampaign,
-  Parliamentarian,
-  VotingSession,
   LegislativeBill,
 } from './types';
 import {
@@ -40,8 +38,6 @@ import {
   mockAuditLogs,
   mockNewsletterSubscribers,
   mockNewsletterCampaigns,
-  mockParliamentarians,
-  mockVotingSessions,
   mockLegislativeBills,
 } from './data/mockData';
 
@@ -188,12 +184,9 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>(mockAuditLogs);
   const [subscribers, setSubscribers] = useState<NewsletterSubscriber[]>(mockNewsletterSubscribers);
   const [campaigns, setCampaigns] = useState<NewsletterCampaign[]>(mockNewsletterCampaigns);
-  // Casa legislativa do gabinete (esfera, cadeiras, quóruns). Os dados de exemplo do plenário são da ALMT:
-  // só aparecem para gabinete estadual de MT; nas demais casas o plenário começa vazio para cadastro.
+  // Casa legislativa do gabinete (esfera, cadeiras, quóruns). A composição e as votações do plenário vêm
+  // das fontes oficiais da casa (server/plenario), carregadas pelo próprio módulo.
   const chamber = chamberConfig({ sphere: tenantCabinet.sphere, state: tenantCabinet.state, city: tenantCabinet.city, house: tenantCabinet.house, seats: tenantCabinet.seats });
-  const isAlmtDemo = chamber.sphere === 'estadual' && chamber.uf === 'MT';
-  const [parliamentarians, setParliamentarians] = useState<Parliamentarian[]>(isAlmtDemo ? mockParliamentarians : []);
-  const [votingSessions, setVotingSessions] = useState<VotingSession[]>(isAlmtDemo ? mockVotingSessions : []);
   const [bills, setBills] = useState<LegislativeBill[]>(mockLegislativeBills);
   // Ofício a destacar ao abrir Legislativo › Ofícios a partir da Base de Conhecimento.
   const [focusLetterId, setFocusLetterId] = useState<string | null>(null);
@@ -511,20 +504,6 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
     setCampaigns((prev) => [cmp, ...prev]);
   };
 
-  const handleAddParliamentarian = (p: Parliamentarian) => {
-    setParliamentarians((prev) => [...prev, p]);
-  };
-
-  const handleUpdateParliamentarian = (p: Parliamentarian) => {
-    setParliamentarians((prev) =>
-      prev.map((dep) => (dep.id === p.id ? p : dep))
-    );
-  };
-
-  const handleSaveVotingSession = (session: VotingSession) => {
-    setVotingSessions((prev) => [session, ...prev]);
-  };
-
   const handleCreateBill = (bill: LegislativeBill) => {
     setBills((prev) => [bill, ...prev]);
   };
@@ -776,14 +755,7 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
           )}
 
           {(currentModule === 'legislativo_parlamento' || currentModule === 'legislativo') && (
-            <ParlamentoHemicicloModule
-              chamber={chamber}
-              parliamentarians={parliamentarians}
-              votingSessions={votingSessions}
-              onAddParliamentarian={handleAddParliamentarian}
-              onUpdateParliamentarian={handleUpdateParliamentarian}
-              onSaveVotingSession={handleSaveVotingSession}
-            />
+            <ParlamentoHemicicloModule key={chamber.sphere + chamber.uf + chamber.city} chamber={chamber} />
           )}
 
           {currentModule === 'integracoes' && <IntegracoesModule onOpenWhatsApp={openAtendimentoWhatsApp} />}

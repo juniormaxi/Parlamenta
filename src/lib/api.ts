@@ -66,6 +66,8 @@ export interface ApiTenant {
   city: string;
   /** Cadeiras do plenário; 0 = padrão da esfera (ver src/lib/chamber.ts). */
   seats: number;
+  /** Endereço do SAPL da casa (opcional), fonte de composição e votações nominais. */
+  saplUrl: string;
   status: 'active' | 'suspended';
   storageQuotaMb: number;
   maxUsers: number;

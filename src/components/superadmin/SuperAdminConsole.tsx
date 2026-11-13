@@ -708,7 +708,7 @@ function EditTenantModal({ tenant, onClose, run }: { tenant: TenantStats; onClos
     setF((p) => ({ ...p, [k]: e.target.value }));
   const [chamber, setChamber] = useState<ChamberValue>(() => {
     const cfg = chamberConfig({ sphere: tenant.sphere, state: tenant.state || 'MT', city: tenant.city, house: tenant.house, seats: tenant.seats });
-    return { sphere: tenant.sphere, state: cfg.uf || 'MT', city: tenant.city ?? '', seats: cfg.seats, house: tenant.house || cfg.house };
+    return { sphere: tenant.sphere, state: cfg.uf || 'MT', city: tenant.city ?? '', seats: cfg.seats, house: tenant.house || cfg.house, saplUrl: tenant.saplUrl ?? '' };
   });
 
   return (

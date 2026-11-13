@@ -19,6 +19,8 @@ export interface ChamberValue {
   city: string;
   seats: number;
   house: string;
+  /** Endereço do SAPL (municipal/estadual), opcional. */
+  saplUrl?: string;
 }
 
 const inputCls =
@@ -154,6 +156,30 @@ export function ChamberFields({ value, onChange }: { value: ChamberValue; onChan
         <span className="block text-[11px] font-semibold text-slate-700">Casa legislativa</span>
         <input className={inputCls} value={v.house} onChange={(e) => onChange({ ...v, house: e.target.value })} placeholder={defaultHouse(v.sphere, v.state, v.city)} />
       </label>
+
+      {v.sphere === 'federal' ? (
+        <p className="text-[10px] text-slate-500">
+          Plenário: deputados, partidos, fotos e votações nominais vêm automaticamente da Câmara dos Deputados (Dados Abertos).
+        </p>
+      ) : (
+        <label className="block space-y-1">
+          <span className="block text-[11px] font-semibold text-slate-700">Endereço do SAPL (opcional)</span>
+          <input
+            className={inputCls}
+            value={v.saplUrl ?? ''}
+            onChange={(e) => onChange({ ...v, saplUrl: e.target.value })}
+            placeholder={v.sphere === 'municipal' ? 'Ex.: sapl.cuiaba.mt.leg.br' : 'Ex.: sapl.al.rr.leg.br'}
+            inputMode="url"
+          />
+          <span className="block text-[10px] text-slate-500">
+            {v.sphere === 'municipal'
+              ? 'Sem SAPL, o plenário usa os vereadores eleitos em 2024 (TSE). Com SAPL, a composição atual e as votações nominais registradas vêm de lá.'
+              : v.state === 'MT'
+                ? 'Sem SAPL, o plenário usa a composição do portal da ALMT. Com SAPL, a composição e as votações nominais registradas vêm de lá.'
+                : 'Sem SAPL, o plenário usa os deputados eleitos em 2022 (TSE). Com SAPL, a composição atual e as votações nominais registradas vêm de lá.'}
+          </span>
+        </label>
+      )}
     </div>
   );
 }

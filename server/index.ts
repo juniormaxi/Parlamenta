@@ -15,6 +15,7 @@ import { crmRouter } from './crm';
 import { blocklistRouter } from './blocklist';
 import { oficiosRouter } from './oficios';
 import { knowledgeRouter } from './knowledge';
+import { plenarioRouter, startPlenarioScheduler, normalizeSaplUrl } from './plenario';
 import { ufInfo, seatLimits, defaultHouse, type Sphere } from '../src/lib/chamber';
 import { db, tx, migrate, audit, tenantStorageBytes, dbFileBytes } from './db';
 import {
@@ -98,7 +99,16 @@ function chamberFields(sphere: Sphere, b: any, current?: any) {
   if (sphere === 'municipal' && !seats) throw bad('Informe o número de vereadores da Câmara Municipal.');
   const houseIn = optStr(b.house, 'house');
   const house = houseIn !== undefined ? houseIn || defaultHouse(sphere, state, city) : (current?.house || defaultHouse(sphere, state, city));
-  return { state, city, seats, house };
+  // SAPL só se aplica a câmaras municipais e assembleias (a Câmara dos Deputados tem API própria).
+  let saplUrl = sphere === 'federal' ? '' : (current?.sapl_url ?? '');
+  if (sphere !== 'federal' && b.saplUrl !== undefined) {
+    try {
+      saplUrl = normalizeSaplUrl(str(b.saplUrl, 'saplUrl', { min: 0, max: 300 }));
+    } catch (e: any) {
+      throw bad(`Endereço do SAPL inválido: ${e.message}`);
+    }
+  }
+  return { state, city, seats, house, saplUrl };
 }
 
 function int(v: unknown, field: string, min: number, max: number): number {
@@ -150,6 +160,7 @@ const publicTenant = (t: any) => ({
   state: t.state,
   city: t.city ?? '',
   seats: t.seats ?? 0,
+  saplUrl: t.sapl_url ?? '',
   status: t.status,
   storageQuotaMb: t.storage_quota_mb,
   maxUsers: t.max_users,
@@ -333,8 +344,8 @@ api.post('/admin/tenants', requireSuperAdmin, async (req, res) => {
   const userId = crypto.randomUUID();
   await tx(async () => {
     await db.prepare(
-      `INSERT INTO tenants (id, slug, name, parliamentarian, sphere, house, state, city, seats, storage_quota_mb, max_users)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO tenants (id, slug, name, parliamentarian, sphere, house, state, city, seats, sapl_url, storage_quota_mb, max_users)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       tenantId,
       slug,
@@ -345,6 +356,7 @@ api.post('/admin/tenants', requireSuperAdmin, async (req, res) => {
       chamber.state,
       chamber.city,
       chamber.seats,
+      chamber.saplUrl,
       quota,
       maxUsers
     );
@@ -371,10 +383,10 @@ api.patch('/admin/tenants/:id', requireSuperAdmin, async (req, res) => {
   };
   // Trocar de esfera zera o nº de cadeiras e o nome da casa, salvo se vierem no pedido.
   const sphereChanged = patch.sphere !== t.sphere;
-  const chamber = chamberFields(patch.sphere, b, sphereChanged ? { state: t.state, city: t.city, seats: 0, house: '' } : t);
+  const chamber = chamberFields(patch.sphere, b, sphereChanged ? { state: t.state, city: t.city, seats: 0, house: '', sapl_url: t.sapl_url } : t);
   await db.prepare(
-    `UPDATE tenants SET name=?, parliamentarian=?, sphere=?, house=?, state=?, city=?, seats=?, status=?, storage_quota_mb=?, max_users=? WHERE id=?`
-  ).run(patch.name, patch.parliamentarian, patch.sphere, chamber.house, chamber.state, chamber.city, chamber.seats, patch.status, patch.storage_quota_mb, patch.max_users, t.id);
+    `UPDATE tenants SET name=?, parliamentarian=?, sphere=?, house=?, state=?, city=?, seats=?, sapl_url=?, status=?, storage_quota_mb=?, max_users=? WHERE id=?`
+  ).run(patch.name, patch.parliamentarian, patch.sphere, chamber.house, chamber.state, chamber.city, chamber.seats, chamber.saplUrl, patch.status, patch.storage_quota_mb, patch.max_users, t.id);
   if (patch.status === 'suspended' && t.status !== 'suspended') await revokeTenantSessions(t.id);
   await audit({ ...actor(req), tenantId: t.id, action: 'tenant.updated', target: t.slug, details: b });
   res.json(publicTenant(await db.prepare(`SELECT * FROM tenants WHERE id = ?`).get(t.id)));
@@ -563,6 +575,8 @@ tenant.use('/blocklist', blocklistRouter);
 // Legislativo › Ofícios e Banco de Dados › Base de Conhecimento — always scoped to the session's tenant.
 tenant.use('/oficios', oficiosRouter);
 tenant.use('/knowledge', knowledgeRouter);
+// Legislativo › Plenário (composição, votações nominais e alinhamento) — always scoped to the session's tenant.
+tenant.use('/plenario', plenarioRouter);
 
 api.use('/tenant', tenant);
 // Site do parlamentar (sem login): abertura de demanda e consulta de protocolo.
@@ -592,6 +606,7 @@ await startSpeechWorker();
 await startClippingScheduler();
 startEmailWorker();
 await startWhatsApp();
+await startPlenarioScheduler();
 
 app.listen(PORT, HOST, () => {
   console.log(`Parlamentta API em http://${HOST}:${PORT}/api`);

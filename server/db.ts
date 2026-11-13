@@ -564,6 +564,52 @@ const SCHEMA = `
   -- Casa legislativa do gabinete: município (esfera municipal) e nº de cadeiras do plenário (0 = padrão da esfera).
   ALTER TABLE tenants ADD COLUMN IF NOT EXISTS city  TEXT NOT NULL DEFAULT '';
   ALTER TABLE tenants ADD COLUMN IF NOT EXISTS seats INTEGER NOT NULL DEFAULT 0;
+  -- Endereço do SAPL da casa (opcional): composição e votações nominais vêm de lá quando informado.
+  ALTER TABLE tenants ADD COLUMN IF NOT EXISTS sapl_url TEXT NOT NULL DEFAULT '';
+
+  -- ===== Legislativo › Plenário: dados oficiais por casa legislativa (compartilhados entre gabinetes) =====
+  -- house_key: federal | estadual:MT | municipal:MT:cuiaba (| :sapl:<host> quando a casa usa SAPL).
+  CREATE TABLE IF NOT EXISTS plenary_houses (
+    house_key    TEXT PRIMARY KEY,
+    label        TEXT NOT NULL DEFAULT '',
+    sources      TEXT NOT NULL DEFAULT '[]',   -- JSON [{ name, url, scope }]
+    legislature  TEXT NOT NULL DEFAULT '',
+    members      TEXT NOT NULL DEFAULT '[]',   -- JSON dos parlamentares em exercício
+    meta         TEXT NOT NULL DEFAULT '{}',   -- JSON: anos já importados, avisos
+    status       TEXT NOT NULL DEFAULT 'idle' CHECK (status IN ('idle','syncing','ok','error')),
+    progress     TEXT NOT NULL DEFAULT '',
+    error        TEXT NOT NULL DEFAULT '',
+    synced_at    TEXT,
+    started_at   TEXT
+  );
+  -- Votações nominais oficiais. votes: JSON { memberId: sim|nao|abstencao|obstrucao }; quem não votou fica de fora.
+  CREATE TABLE IF NOT EXISTS plenary_votes (
+    house_key  TEXT NOT NULL REFERENCES plenary_houses(house_key) ON DELETE CASCADE,
+    id         TEXT NOT NULL,
+    date       TEXT NOT NULL,
+    data       TEXT NOT NULL,
+    votes      TEXT NOT NULL,
+    PRIMARY KEY (house_key, id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_plenary_votes_date ON plenary_votes(house_key, date DESC);
+  -- Fotos extraídas de arquivos do TSE (servidas pela API; as demais fontes têm URL pública).
+  CREATE TABLE IF NOT EXISTS plenary_photos (
+    key         TEXT PRIMARY KEY,
+    mime        TEXT NOT NULL,
+    data        BYTEA NOT NULL,
+    fetched_at  TEXT NOT NULL DEFAULT datetime('now')
+  );
+  -- Ajustes do gabinete: member (correção de dados ou parlamentar cadastrado à mão), session (votação
+  -- registrada à mão), note (análise do gabinete sobre votação oficial), config (parlamentar do mandato).
+  CREATE TABLE IF NOT EXISTS plenary_tenant (
+    tenant_id   TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    kind        TEXT NOT NULL CHECK (kind IN ('member','session','note','config')),
+    id          TEXT NOT NULL,
+    data        TEXT NOT NULL,
+    updated_by  TEXT REFERENCES users(id) ON DELETE SET NULL,
+    updated_at  TEXT NOT NULL DEFAULT datetime('now'),
+    PRIMARY KEY (tenant_id, kind, id)
+  );
 
   -- Legislativo › Ofícios (dados do ofício em JSON; colunas para busca/ordenação).
   CREATE TABLE IF NOT EXISTS official_letters (
