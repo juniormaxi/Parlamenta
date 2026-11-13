@@ -31,6 +31,7 @@ import {
   Eye,
   Flame,
   RefreshCw,
+  Radar,
   ExternalLink,
   Loader2,
   Database,
@@ -46,6 +47,7 @@ import { useDialog } from '../../common/Dialogs';
 import { HemicycleChart, type HemicycleGroup } from './HemicycleChart';
 import { UFS, type ChamberConfig } from '../../../lib/chamber';
 import { usePlenario, formatSyncedAt } from '../../../lib/plenario';
+import { RadarTemas } from './RadarTemas';
 
 interface ParlamentoHemicicloModuleProps {
   /** Casa legislativa do gabinete (esfera, nº de cadeiras, quóruns, nomenclatura). */
@@ -158,7 +160,7 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
       setBusy(false);
     }
   };
-  const [activeTab, setActiveTab] = useState<'composicao' | 'votacoes' | 'estrategia'>('composicao');
+  const [activeTab, setActiveTab] = useState<'composicao' | 'votacoes' | 'estrategia' | 'radar'>('composicao');
   const [selectedDeputyId, setSelectedDeputyId] = useState<string | null>(null);
   const selectedDeputy = parliamentarians.find((p) => p.id === selectedDeputyId) ?? null;
   const setSelectedDeputy = (p: Parliamentarian | null) => setSelectedDeputyId(p?.id ?? null);
@@ -599,10 +601,10 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
         {/* Action Controls */}
         <div className="flex items-center flex-wrap gap-2">
           {/* Main Navigation Tabs */}
-          <div className="bg-slate-100 p-0.5 rounded-lg flex items-center text-xs font-medium border border-slate-200">
+          <div className="bg-slate-100 p-0.5 rounded-lg flex flex-wrap items-center text-xs font-medium border border-slate-200">
             <button
               onClick={() => setActiveTab('composicao')}
-              className={`px-3.5 py-1.5 rounded-md transition-all flex items-center gap-1.5 ${
+              className={`px-3 py-1.5 rounded-md transition-all flex items-center gap-1.5 whitespace-nowrap ${
                 activeTab === 'composicao'
                   ? 'bg-white text-slate-900 shadow-xs font-bold'
                   : 'text-slate-600 hover:text-slate-900'
@@ -613,7 +615,7 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
             </button>
             <button
               onClick={() => setActiveTab('votacoes')}
-              className={`px-3.5 py-1.5 rounded-md transition-all flex items-center gap-1.5 ${
+              className={`px-3 py-1.5 rounded-md transition-all flex items-center gap-1.5 whitespace-nowrap ${
                 activeTab === 'votacoes'
                   ? 'bg-white text-slate-900 shadow-xs font-bold'
                   : 'text-slate-600 hover:text-slate-900'
@@ -624,7 +626,7 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
             </button>
             <button
               onClick={() => setActiveTab('estrategia')}
-              className={`px-3.5 py-1.5 rounded-md transition-all flex items-center gap-1.5 ${
+              className={`px-3 py-1.5 rounded-md transition-all flex items-center gap-1.5 whitespace-nowrap ${
                 activeTab === 'estrategia'
                   ? 'bg-white text-slate-900 shadow-xs font-bold'
                   : 'text-slate-600 hover:text-slate-900'
@@ -632,6 +634,15 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
             >
               <Compass className="w-3.5 h-3.5 text-indigo-600" />
               <span>Inteligência Estratégica</span>
+            </button>
+            <button
+              onClick={() => setActiveTab('radar')}
+              className={`px-3 py-1.5 rounded-md transition-all flex items-center gap-1.5 whitespace-nowrap ${
+                activeTab === 'radar' ? 'bg-white text-slate-900 shadow-xs font-bold' : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Radar className="w-3.5 h-3.5 text-[#176B80]" />
+              <span>Radar de Temas</span>
             </button>
           </div>
 
@@ -1689,6 +1700,21 @@ export const ParlamentoHemicicloModule: React.FC<ParlamentoHemicicloModuleProps>
           </div>
         </div>
       )}
+
+      {/* ============================================================ */}
+      {/* TAB 4: RADAR DE TEMAS (fica montado para manter o resultado) */}
+      {/* ============================================================ */}
+      <div className={activeTab === 'radar' ? '' : 'hidden'}>
+        <RadarTemas
+          chamber={chamber}
+          members={parliamentarians}
+          mandateId={mandateId}
+          onOpenMember={(id) => {
+            setSelectedDeputyId(id);
+            setActiveTab('composicao');
+          }}
+        />
+      </div>
 
       {/* ============================================================ */}
       {/* MODAL 1: REGISTRAR NOVA VOTAÇÃO NOMINAL                      */}

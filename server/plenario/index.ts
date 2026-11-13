@@ -35,6 +35,7 @@ import {
   type Theme,
 } from './sources';
 import { norm } from './net';
+import { analyzeTheme, type Direction } from './radar';
 
 export const plenarioRouter = express.Router();
 
@@ -419,6 +420,37 @@ plenarioRouter.get('/votacoes/:id', async (req, res) => {
   const s = (await houseSessions(houseKeyFor(t))).find((x) => x.id === req.params.id);
   if (!s) throw new HttpError(404, 'Votação não encontrada.');
   res.json({ votes: s.votes, matterTitle: s.matterTitle, summary: s.description });
+});
+
+/** Radar de Temas: quem mais votou a favor de um tema, a partir das votações nominais. */
+plenarioRouter.post('/radar', async (req, res) => {
+  const query = txt(req.body?.query, 3000);
+  if (query.length < 3) throw bad('Descreva o tema ou o projeto (mínimo de 3 caracteres).');
+  const overrides: Record<string, Direction> = {};
+  if (req.body?.overrides && typeof req.body.overrides === 'object')
+    for (const [k, v] of Object.entries(req.body.overrides).slice(0, 300))
+      if (v === 'favor' || v === 'contra' || v === 'off') overrides[txt(k, 120)] = v;
+  const t = await tenantChamber(tid(req));
+  const chamber = chamberConfig({ sphere: t.sphere, state: t.state, city: t.city, house: t.house, seats: t.seats });
+  const state = await buildState(tid(req));
+  const own = await tenantRows(tid(req));
+  const official = await houseSessions(houseKeyFor(t));
+  const sessions = [
+    ...official.map((s) => ({ ...s, source: 'oficial' as const, votes: s.votes as Record<string, string> })),
+    ...own.sessions.map((s) => ({ id: s.id, date: s.date, matterCode: s.matterCode, matterTitle: s.matterTitle, description: s.summary, result: s.result, source: 'gabinete' as const, votes: s.votes as Record<string, string> })),
+  ];
+  const result = await analyzeTheme({
+    query,
+    overrides,
+    sessions,
+    members: state.members.map((m) => ({ id: m.id, popularName: m.popularName, party: m.party, uf: m.uf, photoUrl: m.photoUrl, bloc: m.bloc })),
+    mandateId: state.mandateMemberId,
+    houseLabel: state.house.label,
+    quorum: chamber.quorum,
+    seats: chamber.seats,
+  });
+  if ('error' in result) throw bad(result.error!);
+  res.json({ ...result, sessionsTotal: sessions.length });
 });
 
 plenarioRouter.post('/sincronizar', async (req, res) => {
