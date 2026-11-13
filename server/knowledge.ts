@@ -7,6 +7,7 @@ import crypto from 'node:crypto';
 import express from 'express';
 import { db } from './db';
 import { HttpError } from './http';
+import { buildKnowledgeGraph, themesOf } from './knowledgeGraph';
 
 export const knowledgeRouter = express.Router();
 
@@ -84,7 +85,32 @@ knowledgeRouter.get('/', async (req, res) => {
   const tagRows = (await db
     .prepare(`SELECT x AS tag, COUNT(*)::int AS n FROM knowledge_items, jsonb_array_elements_text(tags::jsonb) AS x WHERE tenant_id = ? GROUP BY x ORDER BY x`)
     .all(t)) as any[];
-  res.json({ items: rows.map((r) => mapItem(r)), tags: tagRows.map((r) => ({ tag: r.tag, count: r.n })) });
+  res.json({
+    items: rows.map((r) => ({ ...mapItem(r), themes: themesOf({ title: r.title, summary: r.summary, content: r.content ?? '' }).map((t) => t.theme) })),
+    tags: tagRows.map((r) => ({ tag: r.tag, count: r.n })),
+  });
+});
+
+/** Mapa Neural: temas, documentos, entidades e conexões do acervo do gabinete. */
+knowledgeRouter.get('/graph', async (req, res) => {
+  const rows = (await db
+    .prepare(`SELECT id, source, source_id, title, summary, content, tags, meta, created_at FROM knowledge_items WHERE tenant_id = ? ORDER BY updated_at DESC LIMIT 600`)
+    .all(req.auth!.tenantId)) as any[];
+  res.json(
+    buildKnowledgeGraph(
+      rows.map((r) => ({
+        id: r.id,
+        source: r.source,
+        sourceId: r.source_id,
+        title: r.title,
+        summary: r.summary,
+        content: r.content ?? '',
+        tags: JSON.parse(r.tags || '[]'),
+        meta: JSON.parse(r.meta || '{}'),
+        createdAt: r.created_at,
+      }))
+    )
+  );
 });
 
 knowledgeRouter.get('/:id', async (req, res) => {

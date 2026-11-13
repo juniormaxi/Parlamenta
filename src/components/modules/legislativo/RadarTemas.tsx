@@ -480,12 +480,14 @@ export function RadarTemas({
                 </div>
 
                 {/* Partidos */}
-                <div className="xl:col-span-5 bg-white border border-slate-200 rounded-2xl shadow-xs p-4 space-y-3">
+                <div className="xl:col-span-5 bg-white border border-slate-200 rounded-2xl shadow-xs p-4 flex flex-col gap-3">
                   <div className="flex items-center justify-between">
                     <h4 className="text-sm font-bold text-slate-900">Partidos mais alinhados</h4>
                     <span className="text-[10px] text-slate-400">apoio médio · coesão</span>
                   </div>
-                  <div className="space-y-2 max-h-[520px] overflow-y-auto pr-1">
+                  {/* Ocupa exatamente a altura do card do mapa (a lista não estica a linha; rola só o que sobrar). */}
+                  <div className="relative flex-1 min-h-[420px] xl:min-h-0">
+                  <div className="absolute inset-0 space-y-2 overflow-y-auto pr-1">
                     {result.parties
                       .filter((p) => p.support !== null)
                       .map((p, i) => (
@@ -514,6 +516,7 @@ export function RadarTemas({
                         Sem votos no tema: {result.parties.filter((p) => p.support === null).map((p) => p.party).join(', ')}
                       </p>
                     )}
+                  </div>
                   </div>
                 </div>
               </div>

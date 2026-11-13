@@ -19,6 +19,8 @@ export interface KnowledgeItem {
   summary: string;
   content?: string;
   tags: string[];
+  /** Temas identificados automaticamente no conteúdo. */
+  themes?: string[];
   meta: Record<string, any>;
   createdBy: string;
   createdAt: string;

@@ -38,7 +38,7 @@ export const OCCASIONS = [
   'Outro',
 ];
 
-const KEYWORDS: Record<(typeof THEMES)[number], string[]> = {
+export const KEYWORDS: Record<(typeof THEMES)[number], string[]> = {
   Saúde: ['saúde', 'hospital', 'leito', 'médic', 'sus', 'upa', 'vacina', 'cirurgia', 'enferm', 'posto de saúde', 'regulação'],
   Educação: ['educação', 'escola', 'professor', 'aluno', 'ensino', 'creche', 'universidade', 'merenda', 'estudante'],
   Infraestrutura: ['infraestrutura', 'obra', 'asfalto', 'pavimenta', 'ponte', 'saneamento', 'energia', 'água', 'esgoto', 'drenagem'],

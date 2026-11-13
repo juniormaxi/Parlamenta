@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Library, Search, Loader2, Tag, FileText, Send, Building, Calendar, ExternalLink, RefreshCw } from 'lucide-react';
+import { Library, Search, Loader2, Tag, FileText, Send, Building, Calendar, ExternalLink, RefreshCw, Brain, List } from 'lucide-react';
+import { NeuralMap } from './NeuralMap';
 import { knowledge, type KnowledgeItem } from '../../../lib/oficios';
 import { useDialog } from '../../common/Dialogs';
 import { ModuleHeader, Modal, inputCls, btnGhost, btnPrimary } from './ui';
@@ -17,6 +18,7 @@ export const ConhecimentoModule: React.FC<{ onOpenSource?: (source: string, sour
   const [data, setData] = useState<{ items: KnowledgeItem[]; tags: { tag: string; count: number }[] } | null>(null);
   const [open, setOpen] = useState<KnowledgeItem | null>(null);
   const [loading, setLoading] = useState(false);
+  const [view, setView] = useState<'acervo' | 'mapa'>('acervo');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -33,8 +35,9 @@ export const ConhecimentoModule: React.FC<{ onOpenSource?: (source: string, sour
     return () => window.clearTimeout(t);
   }, [load]);
 
-  const openItem = async (it: KnowledgeItem) => {
+  const openItem = async (it: Pick<KnowledgeItem, 'id'>) => {
     try {
+      if (document.fullscreenElement) await document.exitFullscreen().catch(() => undefined);
       setOpen(await knowledge.get(it.id));
     } catch (e) {
       dialog.alert({ title: 'Erro ao abrir', message: (e as Error).message, tone: 'danger' });
@@ -46,10 +49,32 @@ export const ConhecimentoModule: React.FC<{ onOpenSource?: (source: string, sour
       <ModuleHeader
         icon={Library}
         title="Base de Conhecimento"
-        subtitle="Acervo dos documentos produzidos pelo gabinete, organizados por etiquetas. Todo ofício salvo chega aqui com a etiqueta “Ofícios”."
+        subtitle="Acervo dos documentos produzidos pelo gabinete, organizados por etiquetas e por temas identificados no conteúdo. Todo ofício salvo chega aqui com a etiqueta “Ofícios”."
       />
 
-      <div className="bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden">
+      <div className="inline-flex rounded-lg bg-slate-100 p-0.5 text-xs font-semibold border border-slate-200" role="tablist">
+        {(
+          [
+            ['acervo', 'Acervo', List],
+            ['mapa', 'Mapa Neural', Brain],
+          ] as const
+        ).map(([k, l, Icon]) => (
+          <button
+            key={k}
+            role="tab"
+            aria-selected={view === k}
+            onClick={() => setView(k)}
+            className={`px-3.5 py-1.5 rounded-md flex items-center gap-1.5 transition-colors ${view === k ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'}`}
+          >
+            <Icon className={`w-3.5 h-3.5 ${k === 'mapa' ? 'text-[#36B7A5]' : 'text-[#176B80]'}`} />
+            {l}
+          </button>
+        ))}
+      </div>
+
+      {view === 'mapa' && <NeuralMap onOpenItem={(id) => openItem({ id })} onOpenSource={onOpenSource} />}
+
+      <div className={`bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden ${view === 'acervo' ? '' : 'hidden'}`}>
         <div className="p-3 border-b border-slate-100 space-y-2.5">
           <div className="flex gap-2">
             <div className="relative flex-1">
@@ -111,6 +136,13 @@ export const ConhecimentoModule: React.FC<{ onOpenSource?: (source: string, sour
                             #{t}
                           </span>
                         ))}
+                        {it.themes
+                          ?.filter((t) => t !== 'Outros')
+                          .map((t) => (
+                            <span key={t} className="px-1.5 py-0.5 rounded bg-[#36B7A5]/10 text-[#176B80] text-[10px] font-semibold" title="Tema identificado no conteúdo">
+                              {t}
+                            </span>
+                          ))}
                         {it.meta?.statusLabel && <span className="text-[10px] text-slate-500">· {it.meta.statusLabel}</span>}
                         <span className="text-[10px] text-slate-400">
                           · {src.label} de {fmtDate(it.meta?.date || it.createdAt)}
