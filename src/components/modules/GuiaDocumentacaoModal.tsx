@@ -43,7 +43,7 @@ export const GuiaDocumentacaoModal: React.FC<GuiaDocumentacaoModalProps> = ({
                 Documentação Técnica do Protótipo
               </span>
               <span className="text-xs text-slate-300">
-                Parlamenta v1.0
+                Parlamentta v1.0
               </span>
             </div>
             <h2 className="text-base font-bold text-white mt-1">
@@ -136,7 +136,7 @@ export const GuiaDocumentacaoModal: React.FC<GuiaDocumentacaoModalProps> = ({
                       <td className="py-3 px-4 text-slate-800">Meta Cloud API (WhatsApp Business Platform), Instagram Graph API, IMAP/SMTP Gateway.</td>
                     </tr>
                     <tr>
-                      <td className="py-3 px-4 font-semibold text-slate-900">Parlamenta Flow & SLA</td>
+                      <td className="py-3 px-4 font-semibold text-slate-900">Parlamentta Flow & SLA</td>
                       <td className="py-3 px-4 text-slate-600">Cronômetros simulados no cliente, transição de estados e auditoria local.</td>
                       <td className="py-3 px-4 text-slate-800">Motor de workflow BPMN / State Machine (ex: Temporal/BullMQ), Webhooks de notificação e filas Redis.</td>
                     </tr>

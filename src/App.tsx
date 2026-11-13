@@ -62,7 +62,7 @@ import { LoginView } from './components/auth/LoginView';
 import { DashboardModule } from './components/modules/DashboardModule';
 import { AtendimentoModule, MANUAL_ENTRY_TAG, type ManualEntryData } from './components/modules/AtendimentoModule';
 import { ProtocolosModule } from './components/modules/ProtocolosModule';
-import { ParlamentaFlowModule } from './components/modules/ParlamentaFlowModule';
+import { ParlamenttaFlowModule } from './components/modules/ParlamenttaFlowModule';
 import { AgendaTarefasModule } from './components/modules/AgendaTarefasModule';
 import { EquipeModule } from './components/modules/EquipeModule';
 import { InteligenciaTerritorialModule } from './components/modules/InteligenciaTerritorialModule';
@@ -133,7 +133,7 @@ export default function App() {
     );
   }
 
-  if (!session) return <LoginView onLoginSuccess={refresh} cabinetName="Parlamenta" />;
+  if (!session) return <LoginView onLoginSuccess={refresh} cabinetName="Parlamentta" />;
 
   if (session.user.role === 'super_admin') {
     return <SuperAdminConsole user={session.user} onLogout={logout} />;
@@ -537,7 +537,7 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
     atendimento: 'Central de Atendimento Omnichannel',
     whatsapp: 'Atendimento · WhatsApp',
     protocolos: 'Protocolos & Demandas',
-    flow: 'Parlamenta Flow (Workflow)',
+    flow: 'Parlamentta Flow (Workflow)',
     agenda: 'Agenda & Minhas Tarefas',
     equipe: 'Gestão da Equipe',
     territorial: 'Inteligência Territorial (MT)',
@@ -667,7 +667,7 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
           )}
 
           {currentModule === 'flow' && (
-            <ParlamentaFlowModule
+            <ParlamenttaFlowModule
               protocols={protocols}
               teamMembers={mockTeamMembers}
               onUpdateProtocol={handleUpdateProtocol}

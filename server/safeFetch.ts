@@ -13,7 +13,7 @@ import dns from 'node:dns';
 import net from 'node:net';
 import zlib from 'node:zlib';
 
-const UA = 'Mozilla/5.0 (compatible; ParlamentaClipping/1.0; +https://parlamenta.app)';
+const UA = 'Mozilla/5.0 (compatible; ParlamenttaClipping/1.0; +https://parlamentta.app)';
 
 export class FetchError extends Error {}
 

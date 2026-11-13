@@ -1,12 +1,12 @@
-# Parlamenta — Gestão inteligente. Gabinete conectado.
+# Parlamentta — Gestão inteligente. Gabinete conectado.
 
-Plataforma SaaS multi-gabinete para deputados estaduais e federais com foco em gestão de atendimento omnichannel, protocolos de demandas sociais, workflow parlamentar (Parlamenta Flow), inteligência territorial (Mato Grosso) e governança legislativa com conformidade LGPD.
+Plataforma SaaS multi-gabinete para deputados estaduais e federais com foco em gestão de atendimento omnichannel, protocolos de demandas sociais, workflow parlamentar (Parlamentta Flow), inteligência territorial (Mato Grosso) e governança legislativa com conformidade LGPD.
 
 ---
 
 ## 🏛️ 1. Visão Geral do Produto
 
-O **Parlamenta** é uma solução completa para mandatos parlamentares modernos, concebida para aproximar cidadãos e parlamentares com rapidez, transparência e rigor administrativo:
+O **Parlamentta** é uma solução completa para mandatos parlamentares modernos, concebida para aproximar cidadãos e parlamentares com rapidez, transparência e rigor administrativo:
 - **Identidade Institucional Contemporânea**: Paleta neutra e sóbria (#102C45, #176B80, #36B7A5, #E9F1F4), sem partidarismos, com design system acessível (WCAG AA) e tipografia geométrica moderna (`Plus Jakarta Sans` e `JetBrains Mono` tabular).
 - **Multi-Gabinete / Multi-Tenant**: Isolamento lógico de gabinetes (piloto Estadual ALMT e Gabinete Federal na Câmara dos Deputados).
 - **Importação de Identidade Visual**: Área dedicada para upload e visualização do brasão do Estado ou logotipo do mandato diretamente nos documentos oficiais timbrados.
@@ -30,7 +30,7 @@ O **Parlamenta** é uma solução completa para mandatos parlamentares modernos,
    - Visualização alternável em **Tabela Pesquisável** e **Kanban**.
    - Filtros por canal, tema, município (MT), prioridade, status, responsável e SLA.
    - Detalhe em gaveta com histórico de movimentações (timeline imutável), documentos anexos e campo de **Devolutiva ao Cidadão** com rastreabilidade.
-4. **Parlamenta Flow (Workflow & Gestão de Filas)**:
+4. **Parlamentta Flow (Workflow & Gestão de Filas)**:
    - **Fila de Triagem (Coordenador)**: despacho com prazo e prioridade.
    - **Minha Fila (Assessor)**: cronômetros duplos de tempo total e tempo com o responsável atual.
    - Alertas SLA (Normal, Alerta 48h, Atrasado).
@@ -84,7 +84,7 @@ O **Parlamenta** é uma solução completa para mandatos parlamentares modernos,
 A plataforma conta com um simulador interativo ponta a ponta (botão **"Fluxo Demonstrativo"** na barra superior):
 1. **Entrada da Demanda**: Cidadã Maria Eunice de Rondonópolis envia mensagem via WhatsApp relatando superlotação e falta de leitos de UTI Pediátrica no Hospital Regional.
 2. **Triagem Inicial & Criação de Protocolo**: Coordenadora Letícia Prado recebe na Central de Atendimento, valida a sugestão de tema/prioridade e cria o protocolo oficial `PRT-2026-0042`.
-3. **Parlamenta Flow & Atribuição**: Coordenadora despacha a demanda para o Assessor Temático Lucas Mendes com prazo regulamentar de 48h.
+3. **Parlamentta Flow & Atribuição**: Coordenadora despacha a demanda para o Assessor Temático Lucas Mendes com prazo regulamentar de 48h.
 4. **Notificação e Minha Fila**: Lucas Mendes assume a demanda e o cronômetro passa a registrar o tempo em posse do responsável.
 5. **Criação de Tarefa & Agenda**: Assessor agenda audiência técnica com o Secretário de Estado de Saúde (SES-MT) na pauta oficial da Deputada.
 6. **Registro de Execução**: Assessor elabora o Ofício nº 142/2026, anexa ao protocolo e registra a confirmação de abertura de 4 novos leitos pela secretaria.
@@ -97,7 +97,7 @@ A plataforma conta com um simulador interativo ponta a ponta (botão **"Fluxo De
 | Módulo | Implementado no Protótipo (Mock Demonstrativo) | Requisitos para Ambiente de Produção (Backend / APIs) |
 | :--- | :--- | :--- |
 | **Central de Atendimento** | Caixa de entrada unificada com estado local reativo, mensagens de teste e formulário de resposta rápida. | Meta Cloud API (WhatsApp Business API), Instagram Graph API, servidor SMTP/IMAP para e-mails do gabinete. |
-| **Parlamenta Flow** | Cronometragem no cliente, cálculo de SLA e transição de estados com guarda de governança. | Motor de Workflow / State Machine (ex: Temporal, BullMQ ou Temporal.io) com filas Redis e Webhooks de eventos. |
+| **Parlamentta Flow** | Cronometragem no cliente, cálculo de SLA e transição de estados com guarda de governança. | Motor de Workflow / State Machine (ex: Temporal, BullMQ ou Temporal.io) com filas Redis e Webhooks de eventos. |
 | **Inteligência Territorial** | Dados agregados de votação em MT (2018 e 2022) e mapa vetorial interativo de demandas. | API de Dados Abertos do TSE (DivulgaCandContas / Repositório de Votação Nominal por Seção). |
 | **Documentos Timbrados** | Prévia formatada com cabeçalho do gabinete, upload local de imagem e simulação de exportação. | Serviço headless de compilação PDF/ODF, assinatura com certificado digital A1/A3 ICP-Brasil e API do SIGA/ALMT. |
 | **Autenticação & Multi-Tenant** | Comutador de perfis RBAC no cabeçalho e seletor de gabinetes em memória. | OAuth 2.0 / OIDC, MFA (TOTP / WebAuthn) e banco relacional PostgreSQL com Row Level Security (RLS) isolando cada `cabinet_id`. |

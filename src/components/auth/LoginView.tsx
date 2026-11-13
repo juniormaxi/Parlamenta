@@ -165,7 +165,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
               </div>
               <div>
                 <span className="text-2xl font-extrabold tracking-tight text-white block leading-none">
-                  Parlamenta
+                  Parlamentta
                 </span>
                 <span className="text-xs text-[#36B7A5] font-semibold tracking-wider uppercase mt-1 block">
                   Gabinete Conectado
@@ -216,7 +216,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
           {/* System Signature & Version in Left Footer */}
           <div className="pt-8 border-t border-white/10 space-y-1 text-slate-400 text-[11px]">
             <p className="text-slate-300 font-semibold">
-              Parlamenta® · Gestão inteligente. Gabinete conectado.
+              Parlamentta® · Gestão inteligente. Gabinete conectado.
             </p>
             <p className="font-mono text-[10px] text-slate-400">
               Versão 1.0.4 (Build de Produção 2026.11) · Multi-Tenant
@@ -330,7 +330,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                   disabled={loading}
                   className="w-full py-2.5 px-4 bg-[#102C45] hover:bg-[#176B80] text-white text-xs font-bold rounded-xl transition-all shadow-md hover:shadow-lg flex items-center justify-center gap-2 group cursor-pointer disabled:opacity-60"
                 >
-                  <span>{loading ? 'Autenticando Gabinete...' : 'Acessar Plataforma Parlamenta'}</span>
+                  <span>{loading ? 'Autenticando Gabinete...' : 'Acessar Plataforma Parlamentta'}</span>
                   {!loading && (
                     <ArrowRight className="w-4 h-4 group-hover:translate-x-0.5 transition-transform" />
                   )}

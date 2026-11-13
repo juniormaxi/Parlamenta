@@ -107,7 +107,7 @@ async function uploadAndWait(ai: GoogleGenAI, path: string, mimeType: string, di
 /** Transcribe audio/video or OCR a PDF. Returns plain text. */
 export async function extractTextWithAI(path: string, mimeType: string, kind: 'audio' | 'video' | 'pdf'): Promise<string> {
   const ai = client();
-  const file = await uploadAndWait(ai, path, mimeType, `parlamenta-${kind}`);
+  const file = await uploadAndWait(ai, path, mimeType, `parlamentta-${kind}`);
   try {
     const res = await ai.models.generateContent({
       model: model(),

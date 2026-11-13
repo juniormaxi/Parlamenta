@@ -1,5 +1,5 @@
 /**
- * In-app replacements for window.alert / window.confirm, styled with the Parlamenta
+ * In-app replacements for window.alert / window.confirm, styled with the Parlamentta
  * design system. Never use the browser's native dialogs in this app.
  *
  *   const dialog = useDialog();

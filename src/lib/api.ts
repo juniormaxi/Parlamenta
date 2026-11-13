@@ -1,4 +1,4 @@
-/** Thin client for the Parlamenta API (server/). Session lives in an httpOnly cookie. */
+/** Thin client for the Parlamentta API (server/). Session lives in an httpOnly cookie. */
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -15,7 +15,7 @@ export async function api<T = unknown>(
     credentials: 'same-origin',
     headers: {
       // Required by the server's CSRF guard on state-changing requests.
-      'X-Parlamenta-Request': '1',
+      'X-Parlamentta-Request': '1',
       ...(options.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
     },
     body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
@@ -86,7 +86,7 @@ export function uploadFile<T = unknown>(
     const xhr = new XMLHttpRequest();
     xhr.open(method, `/api${path}`);
     xhr.withCredentials = true;
-    xhr.setRequestHeader('X-Parlamenta-Request', '1');
+    xhr.setRequestHeader('X-Parlamentta-Request', '1');
     xhr.setRequestHeader('X-File-Name', encodeURIComponent(file.name));
     xhr.setRequestHeader('Content-Type', 'application/octet-stream');
     xhr.upload.onprogress = (e) => e.lengthComputable && onProgress?.(e.loaded / e.total);

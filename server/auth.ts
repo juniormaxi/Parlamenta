@@ -15,7 +15,7 @@ export type Role = TenantRole | 'super_admin';
 /** Roles allowed to manage users inside their own tenant. */
 export const TENANT_ADMIN_ROLES: TenantRole[] = ['deputado', 'chefe_gabinete'];
 
-export const SESSION_COOKIE = 'parlamenta_sid';
+export const SESSION_COOKIE = 'parlamentta_sid';
 const SESSION_TTL_HOURS = Number(process.env.SESSION_TTL_HOURS || 8);
 const IS_PROD = process.env.NODE_ENV === 'production';
 
@@ -180,7 +180,7 @@ export function requireTenantUser(req: Request, res: Response, next: NextFunctio
  */
 export function requireCsrfHeader(req: Request, res: Response, next: NextFunction) {
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
-  if (req.headers['x-parlamenta-request'] !== '1') return res.status(403).json({ error: 'Requisição recusada (CSRF).' });
+  if (req.headers['x-parlamentta-request'] !== '1') return res.status(403).json({ error: 'Requisição recusada (CSRF).' });
   next();
 }
 

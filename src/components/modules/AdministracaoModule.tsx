@@ -701,7 +701,7 @@ export const AdministracaoModule: React.FC<AdministracaoModuleProps> = ({
                 </div>
                 <div className="mt-3 pt-2.5 border-t border-slate-200/80 flex items-center justify-between text-[11px]">
                   <span className="text-slate-500">Módulo:</span>
-                  <span className="font-semibold text-[#176B80]">Central & Parlamenta Flow</span>
+                  <span className="font-semibold text-[#176B80]">Central & Parlamentta Flow</span>
                 </div>
               </div>
             </div>

@@ -71,7 +71,7 @@ export const FluxoGuiadoModal: React.FC<FluxoGuiadoModalProps> = ({
       step: 3,
       title: 'Atribuição ao Assessor Temático com Prazo SLA',
       role: 'Coordenadora de Atendimento',
-      module: 'Parlamenta Flow (Fila de Triagem)',
+      module: 'Parlamentta Flow (Fila de Triagem)',
       description:
         'A coordenadora avalia a carga da equipe e atribui a demanda ao assessor temático de saúde Lucas Mendes, estipulando prazo regulamentar de 48 horas úteis.',
       actionLabel: 'Atribuir a Lucas Mendes',
@@ -81,7 +81,7 @@ export const FluxoGuiadoModal: React.FC<FluxoGuiadoModalProps> = ({
       step: 4,
       title: 'Notificação e Assunção na "Minha Fila"',
       role: 'Assessor Temático (Lucas Mendes)',
-      module: 'Parlamenta Flow -> Minha Fila',
+      module: 'Parlamentta Flow -> Minha Fila',
       description:
         'Lucas Mendes recebe o alerta no sistema, assume o protocolo. O cronômetro passa a registrar o tempo em posse do responsável.',
       actionLabel: 'Assumir e Planejar Ações',
@@ -111,7 +111,7 @@ export const FluxoGuiadoModal: React.FC<FluxoGuiadoModalProps> = ({
       step: 7,
       title: 'Revisão, Encerramento e Devolutiva Auditável',
       role: 'Chefe de Gabinete / Coordenadora',
-      module: 'Parlamenta Flow -> Fechamento Auditado',
+      module: 'Parlamentta Flow -> Fechamento Auditado',
       description:
         'O coordenador confere o cumprimento do pedido, autoriza o encerramento do protocolo e o sistema envia a devolutiva formal ao WhatsApp da cidadã com log de auditoria LGPD.',
       actionLabel: 'Homologar & Enviar Devolutiva ao Cidadão',

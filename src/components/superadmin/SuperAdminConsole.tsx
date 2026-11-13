@@ -261,7 +261,7 @@ export function SuperAdminConsole({ user, onLogout }: { user: ApiUser; onLogout:
           <div className="flex items-center gap-3 min-w-0">
             <div className="w-9 h-9 rounded-lg bg-[#36B7A5] flex items-center justify-center font-bold">P</div>
             <div className="min-w-0">
-              <p className="font-bold leading-tight">Parlamenta · Console da Plataforma</p>
+              <p className="font-bold leading-tight">Parlamentta · Console da Plataforma</p>
               <p className="text-[11px] text-white/60 truncate">Administração de gabinetes, usuários e recursos</p>
             </div>
           </div>

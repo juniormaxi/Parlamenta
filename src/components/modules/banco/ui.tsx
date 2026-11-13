@@ -1,4 +1,4 @@
-/** Shared UI primitives for the "Banco de Dados" modules (same palette as the rest of Parlamenta). */
+/** Shared UI primitives for the "Banco de Dados" modules (same palette as the rest of Parlamentta). */
 import React, { useState } from 'react';
 import { X } from 'lucide-react';
 

@@ -83,7 +83,7 @@ export const Topbar: React.FC<TopbarProps> = ({
         </button>
 
         <div className="hidden sm:flex items-center gap-2 text-xs text-slate-500 font-medium">
-          <span>Parlamenta</span>
+          <span>Parlamentta</span>
           <span className="text-slate-300">/</span>
           <span className="text-slate-900 font-semibold">{moduleTitle}</span>
         </div>

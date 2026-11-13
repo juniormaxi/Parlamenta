@@ -312,7 +312,7 @@ export const mockProtocols: Protocol[] = [
         author: 'Letícia Prado',
         role: 'Coordenadora de Atendimento',
         action: 'Triagem & Criação de Protocolo',
-        description: 'Protocolo classificado como Urgente/Saúde e registrado no sistema Parlamenta.',
+        description: 'Protocolo classificado como Urgente/Saúde e registrado no sistema Parlamentta.',
       },
       {
         id: 'tl-3',
@@ -475,7 +475,7 @@ export const mockProtocols: Protocol[] = [
       {
         id: 'tl-43',
         timestamp: '07/11 09:00',
-        author: 'Sistema Parlamenta',
+        author: 'Sistema Parlamentta',
         role: 'Alerta SLA',
         action: 'Prazo Ultrapassado',
         description: 'Aguardando retorno formal da SESP há 7 dias úteis.',
@@ -2140,7 +2140,7 @@ export const mockOfficialLetters: OfficialLetterModel[] = [
 
 Cumprimentando-o cordialmente, sirvo-me do presente para solicitar a Vossa Excelência providências urgentes no sentido de autorizar a realização de obras de recuperação asfáltica, tapa-buracos e reforço de sinalização horizontal e vertical na Rodovia MT-249, no trecho compreendido entre o município de Nova Mutum e o distrito de Santa Rita do Trivelato.
 
-Tal solicitação é fruto de reiteradas demandas encaminhadas a este Gabinete Parlamentar por cooperativas de transporte e moradores da região (Protocolo Parlamenta PRT-2026-0042), tendo em vista o iminente início do escoamento da safra 2026/2027 e os elevados índices de acidentes registrados pela Polícia Militar Rodoviária decorrentes da degradação do pavimento.
+Tal solicitação é fruto de reiteradas demandas encaminhadas a este Gabinete Parlamentar por cooperativas de transporte e moradores da região (Protocolo Parlamentta PRT-2026-0042), tendo em vista o iminente início do escoamento da safra 2026/2027 e os elevados índices de acidentes registrados pela Polícia Militar Rodoviária decorrentes da degradação do pavimento.
 
 Certo de contar com a costumeira atenção e presteza de Vossa Excelência, renovo votos de elevada estima e consideração, solicitando manifestação sobre a previsão de intervenção no prazo regimental de 15 (quinze) dias.
 

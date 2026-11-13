@@ -583,7 +583,7 @@ export const AtendimentoModule: React.FC<AtendimentoModuleProps> = ({
               <div className="bg-[#E9F1F4] p-3 rounded-lg text-[11px] text-slate-600 flex items-start gap-2">
                 <ShieldCheck className="w-4 h-4 text-[#176B80] shrink-0 mt-0.5" />
                 <span>
-                  Ao confirmar, o protocolo entrará na <strong>Fila de Triagem do Coordenador</strong> no Parlamenta Flow para atribuição a um assessor parlamentar com fixação de prazo SLA.
+                  Ao confirmar, o protocolo entrará na <strong>Fila de Triagem do Coordenador</strong> no Parlamentta Flow para atribuição a um assessor parlamentar com fixação de prazo SLA.
                 </span>
               </div>
             </div>

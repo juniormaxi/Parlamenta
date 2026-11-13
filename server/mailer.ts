@@ -36,7 +36,7 @@ async function fromHeader(tenantId: string | null) {
   const addr = process.env.RESEND_FROM_EMAIL!;
   if (addr.includes('<')) return addr; // already "Nome <email>"
   const t = tenantId ? (await db.prepare(`SELECT name, parliamentarian FROM tenants WHERE id = ?`).get(tenantId) as any) : null;
-  const name = String(t?.parliamentarian || t?.name || 'Parlamenta').replace(/["<>\r\n]/g, '').slice(0, 80);
+  const name = String(t?.parliamentarian || t?.name || 'Parlamentta').replace(/["<>\r\n]/g, '').slice(0, 80);
   return `${name} <${addr}>`;
 }
 

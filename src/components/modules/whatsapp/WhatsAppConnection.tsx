@@ -184,7 +184,7 @@ export const WhatsAppConnection: React.FC<{ status: WhatsAppStatus | null; error
               )}
             </ol>
             <p className="text-[11px] text-slate-500">
-              O Parlamenta passa a funcionar como um aparelho conectado (igual ao WhatsApp Web). Mantenha o celular com internet.
+              O Parlamentta passa a funcionar como um aparelho conectado (igual ao WhatsApp Web). Mantenha o celular com internet.
             </p>
             {status.canManage && (
               <button disabled={busy} onClick={() => act(wa.cancel)} className={`${btn} border border-slate-200 text-slate-600 hover:bg-slate-50`}>

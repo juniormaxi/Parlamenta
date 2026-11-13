@@ -104,7 +104,7 @@ export const OficiosModule: React.FC<OficiosModuleProps> = ({
 
 Cumprimentando-o cordialmente, sirvo-me do presente para solicitar a Vossa Excelência especial atenção e providências urgentes no sentido de viabilizar ${aiForm.subject.toLowerCase()} no município de ${aiForm.cityTarget}.
 
-A presente demanda origina-se de solicitação formal protocolada junto a este Gabinete Parlamentar (Protocolo Parlamenta nº ${aiForm.linkedProtocolId || 'PRT-2026-GAB'}), subscrita por lideranças comunitárias e gestores locais, os quais relatam que ${aiForm.contextDemand}.
+A presente demanda origina-se de solicitação formal protocolada junto a este Gabinete Parlamentar (Protocolo Parlamentta nº ${aiForm.linkedProtocolId || 'PRT-2026-GAB'}), subscrita por lideranças comunitárias e gestores locais, os quais relatam que ${aiForm.contextDemand}.
 
 Ressalta-se que este Mandato Parlamentar acompanha com prioridade as ações voltadas ao fortalecimento das políticas públicas no interior de Mato Grosso, colocando-se à disposição para alocação de emenda parlamentar impositiva com vistas a cofinanciar a referida intervenção.
 

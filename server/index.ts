@@ -45,7 +45,7 @@ const HOST = process.env.API_HOST || (process.env.NODE_ENV === 'production' ? '0
 async function bootstrapSuperAdmin() {
   const existing = await db.prepare(`SELECT COUNT(*) AS n FROM users WHERE role = 'super_admin'`).get() as any;
   if (existing.n > 0) return;
-  const email = (process.env.SUPERADMIN_EMAIL || 'admin@parlamenta.local').toLowerCase();
+  const email = (process.env.SUPERADMIN_EMAIL || 'admin@parlamentta.local').toLowerCase();
   let password = process.env.SUPERADMIN_PASSWORD || '';
   const generated = !password;
   if (generated) password = crypto.randomBytes(12).toString('base64url') + 'Aa1';
@@ -555,5 +555,5 @@ startEmailWorker();
 await startWhatsApp();
 
 app.listen(PORT, HOST, () => {
-  console.log(`Parlamenta API em http://${HOST}:${PORT}/api`);
+  console.log(`Parlamentta API em http://${HOST}:${PORT}/api`);
 });

@@ -19,8 +19,9 @@ import path from 'node:path';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import pg from 'pg';
 
-/** Uploaded files (speeches) still live on disk — mount a Railway Volume here in production. */
-export const DATA_DIR = process.env.PARLAMENTA_DATA_DIR || path.resolve(process.cwd(), 'data');
+/** Uploaded files (speeches) still live on disk — mount a Railway Volume here in production.
+ *  PARLAMENTA_DATA_DIR (nome antigo) continua aceito para não quebrar deploys existentes. */
+export const DATA_DIR = process.env.PARLAMENTTA_DATA_DIR || process.env.PARLAMENTA_DATA_DIR || path.resolve(process.cwd(), 'data');
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
 // COUNT/SUM return int8/numeric; the app always treated them as JS numbers.

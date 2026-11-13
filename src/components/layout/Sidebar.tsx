@@ -94,7 +94,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     },
     {
       id: 'flow',
-      label: 'Parlamenta Flow',
+      label: 'Parlamentta Flow',
       icon: Workflow,
       badge: badgeCounts.flowAlertas,
       badgeVariant: 'alert',
@@ -140,7 +140,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </div>
             <div className="truncate">
               <span className="text-base font-bold tracking-tight text-white block leading-none">
-                Parlamenta
+                Parlamentta
               </span>
               <span className="text-[10px] text-slate-300 font-medium tracking-wide">
                 Gabinete Conectado
@@ -424,7 +424,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="p-3 border-t border-[#176B80]/40 text-center">
         {!collapsed ? (
           <div className="text-[10px] text-slate-300">
-            <p className="font-semibold text-slate-200">Parlamenta v1.0.4</p>
+            <p className="font-semibold text-slate-200">Parlamentta v1.0.4</p>
           </div>
         ) : (
           <span className="text-[10px] font-mono text-slate-400">v1.0.4</span>

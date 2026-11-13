@@ -19,14 +19,14 @@ import {
 } from 'lucide-react';
 import { Protocol, TeamMember, ProtocolStatus, PriorityType } from '../../types';
 
-interface ParlamentaFlowModuleProps {
+interface ParlamenttaFlowModuleProps {
   protocols: Protocol[];
   teamMembers: TeamMember[];
   onUpdateProtocol: (updated: Protocol) => void;
   currentUserId?: string;
 }
 
-export const ParlamentaFlowModule: React.FC<ParlamentaFlowModuleProps> = ({
+export const ParlamenttaFlowModule: React.FC<ParlamenttaFlowModuleProps> = ({
   protocols,
   teamMembers,
   onUpdateProtocol,
@@ -200,7 +200,7 @@ export const ParlamentaFlowModule: React.FC<ParlamentaFlowModuleProps> = ({
         <div>
           <h1 className="text-lg font-bold text-slate-900 tracking-tight flex items-center gap-2">
             <Workflow className="w-5 h-5 text-[#176B80]" />
-            Parlamenta Flow · Gestão de Filas & SLA
+            Parlamentta Flow · Gestão de Filas & SLA
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
             Distribuição controlada, cronometragem por assessor e governança de encerramento

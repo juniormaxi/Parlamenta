@@ -495,7 +495,7 @@ bancoRouter.get(
     const cats = [...(await categoryMap(tid(req))).values()].sort((a, b) => a.localeCompare(b, 'pt-BR'));
     const tagNames = [...(await tagMap(tid(req))).values()].sort((a, b) => a.localeCompare(b, 'pt-BR'));
     const wb = new ExcelJS.Workbook();
-    wb.creator = 'Parlamenta';
+    wb.creator = 'Parlamentta';
     const ws = wb.addWorksheet('Contatos', { views: [{ state: 'frozen', ySplit: 1 }] });
     ws.columns = TEMPLATE_COLUMNS.map((c) => ({ header: c.header, key: c.key, width: c.width }));
     const head = ws.getRow(1);
@@ -533,7 +533,7 @@ bancoRouter.get(
 
     const help = wb.addWorksheet('Instruções');
     help.columns = [{ width: 26 }, { width: 14 }, { width: 80 }];
-    help.addRow(['Planilha modelo de importação de contatos — Parlamenta']).font = { bold: true, size: 14, color: { argb: 'FF102C45' } };
+    help.addRow(['Planilha modelo de importação de contatos — Parlamentta']).font = { bold: true, size: 14, color: { argb: 'FF102C45' } };
     help.addRow([]);
     help.addRow(['Coluna', 'Obrigatória', 'Formato / observações']).font = { bold: true };
     for (const c of TEMPLATE_COLUMNS) help.addRow([c.header, c.key === 'name' ? 'Sim' : '', c.hint]);
@@ -550,7 +550,7 @@ bancoRouter.get(
     ].forEach((t) => help.addRow([t]));
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', 'attachment; filename="parlamenta-modelo-importacao-contatos.xlsx"');
+    res.setHeader('Content-Disposition', 'attachment; filename="parlamentta-modelo-importacao-contatos.xlsx"');
     res.send(Buffer.from(await wb.xlsx.writeBuffer()));
   })
 );
