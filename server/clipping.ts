@@ -10,6 +10,8 @@ import { XMLParser } from 'fast-xml-parser';
 import { db, tx, audit } from './db';
 import { HttpError, bad } from './http';
 import { safeGet, FetchError } from './safeFetch';
+import { requestSync, syncNow } from './kb/ingest';
+import './kb/sources';
 import { aiAvailable, keywordThemes, lexiconSentiment, classifyClippingWithAI, THEMES, type Sentiment } from './ai';
 
 export const clippingRouter = express.Router();
@@ -360,6 +362,9 @@ export async function runCollection(tenantId: string, trigger: 'auto' | 'manual'
       }
     }
 
+    // Base de Conhecimento: as notícias novas entram pela fila (sincronização por referência).
+    for (const id of newIds) await requestSync(tenantId, 'clipping', id, null);
+
     await db.prepare(`UPDATE clipping_runs SET finished_at = datetime('now'), status = 'done', new_items = ?, requests = ?, errors = ? WHERE id = ?`).run(
       inserted, requests, JSON.stringify(errors.slice(0, 30)), runId
     );
@@ -660,7 +665,11 @@ clippingRouter.patch('/items/:id', async (req, res) => {
   if (b.sentiment !== undefined) await setSentiment(req, [req.params.id], parseSentiment(b.sentiment));
   if (b.archived !== undefined) {
     requireManager(req);
-    await db.prepare(`UPDATE clipping_items SET archived = ? WHERE id = ? AND tenant_id = ?`).run(b.archived ? 1 : 0, req.params.id, tid(req));
+    await tx(async () => {
+      await db.prepare(`UPDATE clipping_items SET archived = ? WHERE id = ? AND tenant_id = ?`).run(b.archived ? 1 : 0, req.params.id, tid(req));
+      // arquivada → sai da Base de Conhecimento; desarquivada → volta
+      await syncNow(tid(req), 'clipping', req.params.id, req.auth!.userId);
+    });
   }
   const r = await db.prepare(`SELECT ci.*, u.name AS rated_by_name FROM clipping_items ci LEFT JOIN users u ON u.id = ci.sentiment_user_id WHERE ci.id = ?`).get(req.params.id);
   res.json(publicItem(r));
@@ -680,6 +689,7 @@ clippingRouter.post('/items/bulk', async (req, res) => {
       for (const id of ids) changed += Number((await upd.run(b.archived ? 1 : 0, id, tid(req))).changes);
     }
   });
+  if (b.archived !== undefined) for (const id of ids) await requestSync(tid(req), 'clipping', id, req.auth!.userId);
   res.json({ changed });
 });
 

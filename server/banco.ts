@@ -8,11 +8,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import express, { type Request, type Response, type NextFunction } from 'express';
 import ExcelJS from 'exceljs';
-import mammoth from 'mammoth';
 import { db, tx, audit, tenantStorageBytes, DATA_DIR } from './db';
 import { HttpError, bad } from './http';
 import { taxonomyRouter, categoryMap, tagMap, resolveTaxonomy, createCategoryIfMissing, createTagIfMissing } from './taxonomy';
-import { THEMES, OCCASIONS, keywordThemes, aiAvailable, extractTextWithAI, classifyWithAI } from './ai';
+import { THEMES, OCCASIONS, keywordThemes, aiAvailable, classifyWithAI } from './ai';
+import { enqueue as enqueueJob, registerJob, isLastAttempt, PermanentJobError, type Job } from './jobs';
+import { extractFile, NeedsAiError } from './kb/extract';
+import { syncNow } from './kb/ingest';
+import './kb/sources';
 
 export const bancoRouter = express.Router();
 bancoRouter.use(taxonomyRouter);
@@ -940,7 +943,7 @@ bancoRouter.put(
       `UPDATE speeches SET file_name=?, mime_type=?, media_type=?, file_bytes=?, stored_bytes=?, file_kept=1, status='queued', status_detail='' WHERE id=?`
     ).run(fileName, info.mime, info.kind, size, info.kind === 'video' ? 0 : size, s.id);
     await audit({ ...actor(req), action: 'speech.uploaded', target: s.title, details: { fileName, size, kind: info.kind } });
-    enqueue(s.id);
+    await enqueueSpeech(s.tenant_id, s.id);
     res.json({ ok: true });
   })
 );
@@ -957,9 +960,14 @@ bancoRouter.patch('/speeches/:id', async (req, res) => {
   const keywords = b.keywords === undefined ? s.keywords : JSON.stringify(uniq((b.keywords as unknown[]).map((k) => String(k).trim().slice(0, 60)).filter(Boolean)).slice(0, 20));
   const text = b.text === undefined ? s.text : String(b.text).slice(0, 5_000_000);
   const taggedBy = b.themes !== undefined || b.keywords !== undefined ? 'manual' : s.tagged_by;
-  await db.prepare(`UPDATE speeches SET title=?, speech_date=?, occasion=?, location=?, themes=?, keywords=?, text=?, tagged_by=? WHERE id=?`).run(
-    title, date, occasion, location, themes, keywords, text, taggedBy, s.id
-  );
+  await tx(async () => {
+    await db.prepare(`UPDATE speeches SET title=?, speech_date=?, occasion=?, location=?, themes=?, keywords=?, text=?, tagged_by=?,
+                        text_pages = CASE WHEN text = ? THEN text_pages ELSE '' END WHERE id=?`).run(
+      title, date, occasion, location, themes, keywords, text, taggedBy, text, s.id
+    );
+    // Base de Conhecimento: mesma transação (se a publicação falhar, a edição é desfeita).
+    await syncNow(s.tenant_id, 'discurso', s.id, req.auth!.userId);
+  });
   await audit({ ...actor(req), action: 'speech.updated', target: title });
   res.json({ ok: true });
 });
@@ -972,7 +980,7 @@ bancoRouter.post('/speeches/:id/reprocess', async (req, res) => {
   // Reprocessing re-runs the automatic tagging, replacing manual tags.
   await db.prepare(`UPDATE speeches SET status='queued', status_detail='', tagged_by='' WHERE id=?`).run(s.id);
   await audit({ ...actor(req), action: 'speech.reprocessed', target: s.title });
-  enqueue(s.id);
+  await enqueueSpeech(s.tenant_id, s.id);
   res.json({ ok: true });
 });
 
@@ -991,40 +999,43 @@ bancoRouter.delete('/speeches/:id', async (req, res) => {
   const s = await db.prepare(`SELECT * FROM speeches WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req)) as any;
   if (!s) throw new HttpError(404, 'Discurso não encontrado.');
   if (s.status === 'processing') throw bad('Aguarde o fim do processamento para excluir.');
+  await tx(async () => {
+    await db.prepare(`DELETE FROM speeches WHERE id = ?`).run(s.id);
+    await syncNow(s.tenant_id, 'discurso', s.id, req.auth!.userId); // registro excluído → sai da base
+  });
   if (s.file_name) fs.rmSync(speechPath(s), { force: true });
-  await db.prepare(`DELETE FROM speeches WHERE id = ?`).run(s.id);
   await audit({ ...actor(req), action: 'speech.deleted', target: s.title });
   res.json({ ok: true });
 });
 
 // ---------------------------------------------------------------------------
-// background worker (in-process queue, 1 job at a time)
+// processamento em segundo plano — fila persistente (server/jobs.ts), segura com várias réplicas
 // ---------------------------------------------------------------------------
-const queue: string[] = [];
-let running = false;
-
-function enqueue(id: string) {
-  if (!queue.includes(id)) queue.push(id);
-  void drain();
+async function enqueueSpeech(tenantId: string, id: string) {
+  await enqueueJob({ tenantId, kind: 'speech.process', ref: id, dedupeKey: `speech:${id}`, maxAttempts: 4 });
 }
 
-async function drain() {
-  if (running) return;
-  running = true;
-  try {
-    while (queue.length) {
-      const id = queue.shift()!;
-      try {
-        await processSpeech(id);
-      } catch (e) {
-        console.error('[discursos] falha', id, e);
-        await db.prepare(`UPDATE speeches SET status='error', status_detail=? WHERE id=?`).run(String((e as Error).message ?? e).slice(0, 500), id);
-      }
+registerJob(
+  'speech.process',
+  async (job: Job) => {
+    try {
+      await processSpeech(job.ref);
+    } catch (e) {
+      const final = e instanceof PermanentJobError || isLastAttempt(job);
+      const msg = String((e as Error).message ?? e).slice(0, 400);
+      // On retry keep already-extracted text ('processing' skips a new — possibly paid — extraction).
+      await db
+        .prepare(`UPDATE speeches SET status = CASE WHEN ? THEN 'error' WHEN text <> '' THEN 'processing' ELSE 'queued' END, status_detail=? WHERE id=?`)
+        .run(
+          final,
+          final ? msg : `Falha temporária (${msg.slice(0, 200)}). Nova tentativa automática ${job.attempts + 1} de ${job.max_attempts}.`,
+          job.ref
+        );
+      throw e;
     }
-  } finally {
-    running = false;
-  }
-}
+  },
+  { timeoutMs: 25 * 60_000 }
+);
 
 const setStatus = async (id: string, status: string, detail = '') =>
   await db.prepare(`UPDATE speeches SET status=?, status_detail=? WHERE id=?`).run(status, detail, id);
@@ -1036,26 +1047,24 @@ async function processSpeech(id: string) {
   const file = speechPath(s);
   let text: string = s.text;
 
-  // 1) obtain text
+  // 1) obtain text (local extraction first; AI only for scanned PDFs, audio and video)
   if (!text || s.status === 'queued') {
-    if (kind === 'text') {
-      const buf = fs.readFileSync(file);
-      text = buf.toString('utf8');
-      if (text.includes('�')) text = buf.toString('latin1');
-      text = text.replace(/^﻿/, '').trim();
-    } else if (kind === 'docx') {
-      await setStatus(id, 'processing', 'Extraindo texto do documento…');
-      text = (await mammoth.extractRawText({ path: file })).value.trim();
-    } else if (!text) {
-      if (!aiAvailable()) {
-        await setStatus(id, 'needs_ai', kind === 'pdf' ? 'OCR do PDF requer a chave da IA (GEMINI_API_KEY).' : 'A decupagem requer a chave da IA (GEMINI_API_KEY).');
+    await setStatus(id, 'processing', kind === 'audio' || kind === 'video' ? 'Decupando o áudio com IA…' : 'Extraindo texto do documento…');
+    let r;
+    try {
+      r = await extractFile(file, s.mime_type, kind as 'audio' | 'video' | 'pdf' | 'docx' | 'text');
+    } catch (e) {
+      if (e instanceof NeedsAiError) {
+        await setStatus(id, 'needs_ai', e.message);
         return;
       }
-      await setStatus(id, 'processing', kind === 'pdf' ? 'Extraindo texto do PDF (OCR)…' : 'Decupando o áudio com IA…');
-      text = await extractTextWithAI(file, s.mime_type, kind as 'audio' | 'video' | 'pdf');
+      throw e;
     }
-    if (!text) throw new Error('Nenhum texto encontrado no arquivo.');
-    await db.prepare(`UPDATE speeches SET text=? WHERE id=?`).run(text, id);
+    text = r.text;
+    if (!text) throw new PermanentJobError('Nenhum texto encontrado no arquivo.');
+    await db
+      .prepare(`UPDATE speeches SET text=?, text_pages=?, text_truncated=?, status_detail=? WHERE id=?`)
+      .run(text, r.pages.length ? JSON.stringify(r.pages) : '', r.truncated ? 1 : 0, r.warnings.join(' '), id);
   }
 
   // Videos are discarded once the transcript is safely stored.
@@ -1066,7 +1075,10 @@ async function processSpeech(id: string) {
 
   // 2) classify (AI, or keyword fallback); keep manual tags untouched
   if (s.tagged_by === 'manual') {
-    await db.prepare(`UPDATE speeches SET status='done', status_detail='', processed_at=datetime('now') WHERE id=?`).run(id);
+    await tx(async () => {
+      await db.prepare(`UPDATE speeches SET status='done', processed_at=datetime('now') WHERE id=?`).run(id);
+      await syncNow(s.tenant_id, 'discurso', id, s.created_by);
+    });
     return;
   }
   await setStatus(id, 'processing', 'Classificando temas…');
@@ -1095,14 +1107,30 @@ async function processSpeech(id: string) {
     themes = keywordThemes(text);
     detail = 'Temas sugeridos por palavras-chave. Configure a IA para resumo e etiquetas automáticas.';
   }
-  await db.prepare(
-    `UPDATE speeches SET summary=?, themes=?, keywords=?, tagged_by=?, status='done', status_detail=?, processed_at=datetime('now') WHERE id=?`
-  ).run(summary, JSON.stringify(themes), JSON.stringify(keywords), taggedBy, detail, id);
+  const truncatedNote = (await db.prepare(`SELECT text_truncated FROM speeches WHERE id = ?`).get(id) as any)?.text_truncated
+    ? ' Atenção: a IA atingiu o limite de saída; o texto pode estar incompleto.'
+    : '';
+  await tx(async () => {
+    await db.prepare(
+      `UPDATE speeches SET summary=?, themes=?, keywords=?, tagged_by=?, status='done', status_detail=?, processed_at=datetime('now') WHERE id=?`
+    ).run(summary, JSON.stringify(themes), JSON.stringify(keywords), taggedBy, (detail + truncatedNote).trim(), id);
+    // Base de Conhecimento: o discurso processado entra (ou é atualizado) na mesma transação.
+    await syncNow(s.tenant_id, 'discurso', id, s.created_by);
+  });
 }
 
-/** Resume jobs interrupted by a restart. */
+/**
+ * Boot: garante que discursos pendentes tenham um job na fila persistente (idempotente: a chave de deduplicação
+ * impede duplicatas mesmo com várias réplicas subindo ao mesmo tempo). Jobs interrompidos por queda são
+ * devolvidos à fila pelo lease expirado (server/jobs.ts), não por este boot.
+ */
 export async function startSpeechWorker() {
-  const pending = await db.prepare(`SELECT id FROM speeches WHERE status IN ('queued','processing')`).all() as { id: string }[];
-  await db.prepare(`UPDATE speeches SET status='queued' WHERE status='processing'`).run();
-  pending.forEach((p) => enqueue(p.id));
+  const pending = await db
+    .prepare(
+      `SELECT s.id, s.tenant_id FROM speeches s
+        WHERE s.status IN ('queued','processing')
+          AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.dedupe_key = 'speech:' || s.id AND j.status IN ('queued','running'))`
+    )
+    .all() as { id: string; tenant_id: string }[];
+  for (const p of pending) await enqueueSpeech(p.tenant_id, p.id);
 }

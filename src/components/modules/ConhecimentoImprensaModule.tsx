@@ -40,22 +40,10 @@ export const ConhecimentoImprensaModule: React.FC<ConhecimentoImprensaModuleProp
     tags: 'Saúde, MT, Assembleia',
   });
 
+  // "Aprimorar tom com IA" ainda não existe: não altera o texto nem marca o release como assistido por IA.
   const handleAiTonePolish = () => {
-    if (!selectedRelease) return;
-    setAiEnhancing(true);
-    setAiNote('');
-    setTimeout(() => {
-      const polished: PressRelease = {
-        ...selectedRelease,
-        aiAssisted: true,
-        summary: `[Polido com IA Assistiva]: ${selectedRelease.summary}`,
-        body: `${selectedRelease.body}\n\n*Nota da Assessoria de Imprensa: A presente matéria foi revisada com apoio de IA assistiva para estrita observância do Regimento Interno da ALMT e princípios constitucionais de impessoalidade.*`,
-      };
-      onUpdateRelease(polished);
-      setSelectedRelease(polished);
-      setAiEnhancing(false);
-      setAiNote('Tom institucional e citação da parlamentar padronizados com sucesso!');
-    }, 700);
+    setAiEnhancing(false);
+    setAiNote('Recurso não implementado: nenhuma IA revisou este texto e nada foi alterado.');
   };
 
   const handleApprove = () => {
@@ -176,10 +164,10 @@ export const ConhecimentoImprensaModule: React.FC<ConhecimentoImprensaModuleProp
                     onClick={handleAiTonePolish}
                     disabled={aiEnhancing}
                     className="px-3 py-1.5 text-xs font-semibold text-[#102C45] bg-[#36B7A5]/20 hover:bg-[#36B7A5]/30 rounded-lg transition-colors flex items-center gap-1.5"
-                    title="Revisa tom institucional, adiciona declaração da parlamentar e verifica adequação legal"
+                    title="Ainda não implementado: nenhuma IA revisa o texto."
                   >
                     <Sparkles className="w-3.5 h-3.5 text-[#176B80]" />
-                    <span>{aiEnhancing ? 'Aprimorando...' : 'Aprimorar Tom com IA'}</span>
+                    <span>Aprimorar Tom com IA (não implementado)</span>
                   </button>
 
                   {selectedRelease.status !== 'aprovado' &&

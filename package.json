@@ -12,7 +12,9 @@
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
     "dev:db": "tsx scripts/dev-db.ts",
-    "wacli:install": "tsx scripts/install-wacli.ts"
+    "wacli:install": "tsx scripts/install-wacli.ts",
+    "test": "node --import tsx --test --test-concurrency=1 tests/*.test.ts",
+    "test:perf": "KB_PERF=1 node --import tsx --test tests/kb.perf.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -27,6 +29,7 @@
     "lucide-react": "^0.546.0",
     "mammoth": "^1.9.0",
     "motion": "^12.23.24",
+    "pdfjs-dist": "6.4.299",
     "pg": "8.23.1",
     "qrcode": "^1.5.4",
     "react": "^19.0.1",
@@ -44,6 +47,7 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "autoprefixer": "^10.4.21",
+    "embedded-postgres": "17.10.0-beta.17",
     "esbuild": "0.28.2",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2"

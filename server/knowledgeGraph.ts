@@ -69,13 +69,25 @@ const BOILERPLATE = new Set(
     .map(stem)
 );
 
-export function buildKnowledgeGraph(items: GraphItem[]) {
-  // ---- temas
-  const docThemes = new Map(items.map((it) => [it.id, themesOf(it)]));
-  const themeCount = new Map<string, number>();
-  for (const ts of docThemes.values()) for (const t of ts) themeCount.set(t.theme, (themeCount.get(t.theme) ?? 0) + 1);
+export interface SimilarLink {
+  source: string;
+  target: string;
+  strength: number;
+  shared: string[];
+}
 
-  // ---- TF-IDF para semelhança entre documentos
+/** Até quantos vizinhos por documento e semelhança mínima (mesmos parâmetros da versão original). */
+const NEIGHBORS = 4;
+const MIN_SIM = 0.12;
+/** Acima disso, os candidatos vêm de um índice invertido dos termos mais fortes (evita comparar todos com todos). */
+const BRUTE_FORCE_MAX = 800;
+const TOP_TERMS = 40;
+
+/**
+ * Semelhança de conteúdo entre documentos (TF-IDF + cosseno), até 4 vizinhos por documento.
+ * Pura (sem banco): roda numa worker thread (server/kb/graphWorker.ts) para não bloquear o servidor.
+ */
+export function computeSimilarLinks(items: Pick<GraphItem, 'id' | 'title' | 'summary' | 'content'>[]): SimilarLink[] {
   // Palavra mais usada para cada radical (para mostrar "hospital" em vez de "hospit").
   const surface = new Map<string, Map<string, number>>();
   for (const it of items)
@@ -134,22 +146,64 @@ export function buildKnowledgeGraph(items: GraphItem[]) {
       .map(([t]) => word(t));
   };
 
-  const docLinks: { source: string; target: string; kind: 'similar'; strength: number; shared: string[] }[] = [];
+  // Candidatos: todos (até BRUTE_FORCE_MAX) ou os que compartilham termos fortes (índice invertido).
+  let candidatesOf: (i: number) => Iterable<number>;
+  if (items.length <= BRUTE_FORCE_MAX) {
+    candidatesOf = function* (i) {
+      for (let j = 0; j < items.length; j++) if (j !== i) yield j;
+    };
+  } else {
+    const top = weighted.map((d) => [...d.w.entries()].sort((a, b) => b[1] - a[1]).slice(0, TOP_TERMS).map(([t]) => t));
+    const postings = new Map<string, number[]>();
+    top.forEach((ts, i) => ts.forEach((t) => (postings.get(t) ?? postings.set(t, []).get(t)!).push(i)));
+    const maxPosting = Math.max(200, Math.ceil(Math.sqrt(N) * 10));
+    candidatesOf = (i) => {
+      const score = new Map<number, number>();
+      for (const t of top[i]!) {
+        const p = postings.get(t)!;
+        if (p.length > maxPosting) continue; // termo comum demais para discriminar
+        const x = weighted[i]!.w.get(t)!;
+        for (const j of p) if (j !== i) score.set(j, (score.get(j) ?? 0) + x * weighted[j]!.w.get(t)!);
+      }
+      return [...score.entries()].sort((a, b) => b[1] - a[1]).slice(0, 60).map(([j]) => j);
+    };
+  }
+
+  const links: SimilarLink[] = [];
   const seen = new Set<string>();
-  const neighbors = new Map<string, { id: string; strength: number }[]>();
   for (let i = 0; i < items.length; i++) {
     const cands: { j: number; s: number }[] = [];
-    for (let j = 0; j < items.length; j++) if (j !== i) cands.push({ j, s: sim(i, j) });
+    for (const j of candidatesOf(i)) cands.push({ j, s: sim(i, j) });
     cands.sort((a, b) => b.s - a.s);
-    const list = cands.filter((c) => c.s >= 0.12).slice(0, 4);
-    neighbors.set(items[i]!.id, list.map((c) => ({ id: items[c.j]!.id, strength: Math.round(c.s * 100) / 100 })));
-    for (const c of list) {
-      const key = [i, c.j].sort((a, b) => a - b).join(':');
+    for (const c of cands.filter((c) => c.s >= MIN_SIM).slice(0, NEIGHBORS)) {
+      const [a, b] = items[i]!.id < items[c.j]!.id ? [items[i]!.id, items[c.j]!.id] : [items[c.j]!.id, items[i]!.id];
+      const key = `${a}|${b}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      docLinks.push({ source: items[i]!.id, target: items[c.j]!.id, kind: 'similar', strength: Math.round(c.s * 100) / 100, shared: topTerms(i, c.j) });
+      links.push({ source: a, target: b, strength: Math.round(c.s * 100) / 100, shared: topTerms(i, c.j) });
     }
   }
+  return links;
+}
+
+export type ThemedItem = Omit<GraphItem, 'content'> & { themes: { theme: string; weight: number }[] };
+
+/** Monta nós e ligações do Mapa Neural a partir dos documentos (com temas) e das semelhanças já calculadas. */
+export function assembleGraph(items: ThemedItem[], similar: SimilarLink[]) {
+  const ids = new Set(items.map((it) => it.id));
+  const docThemes = new Map(items.map((it) => [it.id, it.themes.length ? it.themes : [{ theme: 'Outros', weight: 1 }]]));
+  const themeCount = new Map<string, number>();
+  for (const ts of docThemes.values()) for (const t of ts) themeCount.set(t.theme, (themeCount.get(t.theme) ?? 0) + 1);
+
+  const docLinks = similar
+    .filter((l) => ids.has(l.source) && ids.has(l.target))
+    .map((l) => ({ source: l.source, target: l.target, kind: 'similar' as const, strength: l.strength, shared: l.shared }));
+  const neighbors = new Map<string, { id: string; strength: number }[]>();
+  for (const l of docLinks) {
+    (neighbors.get(l.source) ?? neighbors.set(l.source, []).get(l.source)!).push({ id: l.target, strength: l.strength });
+    (neighbors.get(l.target) ?? neighbors.set(l.target, []).get(l.target)!).push({ id: l.source, strength: l.strength });
+  }
+  for (const [k, v] of neighbors) neighbors.set(k, v.sort((a, b) => b.strength - a.strength).slice(0, NEIGHBORS));
 
   // ---- entidades (órgão destinatário, município)
   const entities = new Map<string, { id: string; label: string; kind: 'orgao' | 'municipio'; docs: string[] }>();
@@ -213,4 +267,12 @@ export function buildKnowledgeGraph(items: GraphItem[]) {
       topTheme: [...themeCount.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null,
     },
   };
+}
+
+/** Versão completa (temas + semelhança + montagem) num único passo — usada em testes e acervos pequenos. */
+export function buildKnowledgeGraph(items: GraphItem[]) {
+  return assembleGraph(
+    items.map((it) => ({ ...it, themes: themesOf(it) })),
+    computeSimilarLinks(items)
+  );
 }

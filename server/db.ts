@@ -18,6 +18,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import pg from 'pg';
+import { KB_SCHEMA, KB_POLICIES } from './kb/schema';
 
 /** Uploaded files (speeches) still live on disk — mount a Railway Volume here in production.
  *  PARLAMENTA_DATA_DIR (nome antigo) continua aceito para não quebrar deploys existentes. */
@@ -664,15 +665,27 @@ const SCHEMA = `
   );
 `;
 
-/** Creates/updates the schema. A cluster-wide advisory lock keeps concurrent boots from racing. */
+/**
+ * Creates/updates the schema. A cluster-wide advisory lock keeps concurrent boots from racing.
+ * MIGRATION_DATABASE_URL (opcional): conexão do dono das tabelas. Necessária quando a aplicação usa um papel
+ * sem privilégios (ex.: parlamentta_app, sujeito ao RLS); sem ela, a migração usa a própria DATABASE_URL.
+ */
 export async function migrate() {
-  const client = await pool.connect();
+  const url = process.env.MIGRATION_DATABASE_URL;
+  const owner = url
+    ? new pg.Client({ connectionString: url, ssl: /sslmode=require/.test(url) || process.env.PGSSL === 'require' ? { rejectUnauthorized: false } : undefined })
+    : null;
+  if (owner) await owner.connect();
+  const client = owner ?? (await pool.connect());
   try {
     await client.query('SELECT pg_advisory_lock(727274)');
     await client.query(SCHEMA);
+    await client.query(KB_SCHEMA);
+    await client.query(KB_POLICIES);
   } finally {
     await client.query('SELECT pg_advisory_unlock(727274)').catch(() => undefined);
-    client.release();
+    if (owner) await owner.end().catch(() => undefined);
+    else (client as pg.PoolClient).release();
   }
 }
 
@@ -717,7 +730,8 @@ export async function tenantStorageBytes(): Promise<Map<string, number>> {
        + COALESCE((SELECT SUM(length(ci.title) + length(ci.summary) + length(ci.url) + 200) FROM clipping_items ci WHERE ci.tenant_id = t.id), 0)
        + COALESCE((SELECT SUM(length(p.data) + 128) FROM protocols p WHERE p.tenant_id = t.id), 0)
        + COALESCE((SELECT SUM(length(ol.data) + 128) FROM official_letters ol WHERE ol.tenant_id = t.id), 0)
-       + COALESCE((SELECT SUM(length(k.content) + length(k.title) + length(k.tags) + 128) FROM knowledge_items k WHERE k.tenant_id = t.id), 0)
+       -- Base de Conhecimento: contadores incrementais (knowledge_items fica sob RLS e não é varrida aqui).
+       + COALESCE((SELECT SUM(ks.bytes) FROM knowledge_stats ks WHERE ks.tenant_id = t.id), 0)
        + COALESCE((SELECT SUM(length(l.name) + length(l.email) + length(l.notes) + length(l.agent_notes) + 96) FROM crm_leads l WHERE l.tenant_id = t.id), 0)
        + COALESCE((SELECT SUM(length(cc.body) + length(cc.url) + cc.image_size + 128) FROM crm_campaigns cc WHERE cc.tenant_id = t.id), 0)
          AS bytes

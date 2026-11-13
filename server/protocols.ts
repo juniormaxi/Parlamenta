@@ -15,6 +15,8 @@ import { HttpError, bad } from './http';
 import { ensureDemandThemes } from './taxonomy';
 import { queueEmail, kickEmailWorker, layout, esc, appUrl } from './mailer';
 import { queueWhatsApp, kickWhatsAppWorker } from './whatsapp';
+import { syncNow } from './kb/ingest';
+import './kb/sources';
 
 export const WEB_TAG = 'Demanda Web';
 export const WEB_CHANNEL_LABEL = 'Site do Parlamentar';
@@ -206,6 +208,8 @@ tenantProtocolsRouter.post('/', async (req, res) => {
       }
     );
     await notifyCitizen(tid(req), { number: p.number, data }, { kind: 'opened' });
+    // Base de Conhecimento (sem dados pessoais, acesso restrito) — mesma transação.
+    await syncNow(tid(req), 'protocolo', p.id, req.auth!.userId);
     return p;
   });
   kickEmailWorker();
@@ -249,6 +253,7 @@ tenantProtocolsRouter.patch('/:id', async (req, res) => {
     const p = { number: cur.number, data: next };
     if (responded) await notifyCitizen(tid(req), p, { kind: 'response', status, text: text(next.citizenFeedbackText, 4000) });
     else if (status !== cur.status) await notifyCitizen(tid(req), p, { kind: 'status', status });
+    await syncNow(tid(req), 'protocolo', cur.id, req.auth!.userId);
   });
   kickEmailWorker();
   kickWhatsAppWorker();
@@ -344,6 +349,7 @@ publicRouter.post('/sites/:slug/protocols', async (req, res) => {
       }
     );
     await notifyCitizen(t.id, { number: p.number, data: { citizenName: name, citizenEmail: email, citizenPhone: phone, subject } }, { kind: 'opened' });
+    await syncNow(t.id, 'protocolo', p.id, null);
     return p;
   });
   kickEmailWorker();

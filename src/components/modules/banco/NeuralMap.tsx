@@ -59,6 +59,8 @@ interface GraphData {
   nodes: ApiNode[];
   links: ApiLink[];
   stats: { documents: number; themes: number; synapses: number; similar: number; topTheme: string | null };
+  /** Ligações de semelhança são pré-calculadas em segundo plano; pending = recálculo agendado. */
+  state?: { pending: boolean; builtAt: string | null; limit: number };
 }
 
 // ---------------------------------------------------------------------------
@@ -813,6 +815,12 @@ export function NeuralMap({ onOpenItem, onOpenSource }: { onOpenItem: (id: strin
                   </span>
                 )}
               </div>
+              {data.state?.pending && (
+                <p className="mt-1 text-[10px] text-amber-200/90">Conexões de semelhança sendo recalculadas em segundo plano — atualize em instantes.</p>
+              )}
+              {data.state && data.stats.documents >= data.state.limit && (
+                <p className="mt-1 text-[10px] text-cyan-100/60">Mostrando os {data.state.limit} documentos mais recentes (sigilosos não aparecem no mapa).</p>
+              )}
             </div>
 
             <div className="pointer-events-auto flex flex-col items-end gap-2">

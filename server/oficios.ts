@@ -7,19 +7,13 @@ import crypto from 'node:crypto';
 import express, { type Request } from 'express';
 import { db, tx, audit } from './db';
 import { HttpError, bad } from './http';
-import { upsertKnowledge, removeKnowledge } from './knowledge';
+import { syncNow } from './kb/ingest';
+import './kb/sources';
 
 export const oficiosRouter = express.Router();
 
 export const OFICIO_TAG = 'Ofícios';
 const STATUSES = ['minuta', 'revisao_juridica', 'assinado_deputado', 'protocolado_orgao', 'respondido'];
-const STATUS_LABEL: Record<string, string> = {
-  minuta: 'Minuta',
-  revisao_juridica: 'Em revisão jurídica',
-  assinado_deputado: 'Assinado',
-  protocolado_orgao: 'Protocolado no órgão',
-  respondido: 'Respondido',
-};
 
 const tid = (req: Request) => req.auth!.tenantId!;
 const actor = (req: Request) => ({ actorId: req.auth!.userId, actorEmail: req.auth!.email, tenantId: tid(req), ip: req.ip });
@@ -53,28 +47,9 @@ function parseLetter(b: any, current?: any) {
   return letter;
 }
 
-async function publish(tenantId: string, id: string, l: ReturnType<typeof parseLetter>, userId: string) {
-  await upsertKnowledge({
-    tenantId,
-    source: 'oficio',
-    sourceId: id,
-    title: `${l.code} · ${l.subject}`,
-    summary: [l.recipientName, l.recipientRole, l.recipientOrg].filter(Boolean).join(' · '),
-    content: l.body,
-    tags: [OFICIO_TAG],
-    meta: {
-      code: l.code,
-      date: l.date,
-      status: l.status,
-      statusLabel: STATUS_LABEL[l.status] ?? l.status,
-      recipientName: l.recipientName,
-      recipientRole: l.recipientRole,
-      recipientOrg: l.recipientOrg,
-      cityTarget: l.cityTarget,
-      linkedProtocolId: l.linkedProtocolId,
-    },
-    userId,
-  });
+/** Publica (ou atualiza) o ofício na Base de Conhecimento — na mesma transação da gravação. */
+async function publish(tenantId: string, id: string, userId: string) {
+  await syncNow(tenantId, 'oficio', id, userId);
 }
 
 const mapRow = (r: any) => ({ id: r.id, ...JSON.parse(r.data), createdAt: r.created_at, updatedAt: r.updated_at });
@@ -91,7 +66,7 @@ oficiosRouter.post('/', async (req, res) => {
     await db
       .prepare(`INSERT INTO official_letters (id, tenant_id, code, subject, data, created_by) VALUES (?, ?, ?, ?, ?, ?)`)
       .run(id, tid(req), l.code, l.subject, JSON.stringify(l), req.auth!.userId);
-    await publish(tid(req), id, l, req.auth!.userId);
+    await publish(tid(req), id, req.auth!.userId);
   });
   await audit({ ...actor(req), action: 'oficio.created', target: l.code });
   res.status(201).json(mapRow(await db.prepare(`SELECT * FROM official_letters WHERE id = ?`).get(id)));
@@ -105,7 +80,7 @@ oficiosRouter.patch('/:id', async (req, res) => {
     await db
       .prepare(`UPDATE official_letters SET code = ?, subject = ?, data = ?, updated_at = datetime('now') WHERE id = ?`)
       .run(l.code, l.subject, JSON.stringify(l), row.id);
-    await publish(tid(req), row.id, l, req.auth!.userId);
+    await publish(tid(req), row.id, req.auth!.userId);
   });
   await audit({ ...actor(req), action: 'oficio.updated', target: l.code });
   res.json(mapRow(await db.prepare(`SELECT * FROM official_letters WHERE id = ?`).get(row.id)));
@@ -116,7 +91,7 @@ oficiosRouter.delete('/:id', async (req, res) => {
   if (!row) throw new HttpError(404, 'Ofício não encontrado.');
   await tx(async () => {
     await db.prepare(`DELETE FROM official_letters WHERE id = ?`).run(row.id);
-    await removeKnowledge(tid(req), 'oficio', row.id);
+    await syncNow(tid(req), 'oficio', row.id, req.auth!.userId); // registro excluído → sai da base
   });
   await audit({ ...actor(req), action: 'oficio.deleted', target: row.code });
   res.json({ ok: true });

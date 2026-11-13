@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Shield,
   Key,
@@ -30,6 +30,7 @@ import { GuiaDocumentacaoModal } from './GuiaDocumentacaoModal';
 import { BlockedNumbersPanel } from './admin/BlockedNumbersPanel';
 import { AuditLog, TeamMember } from '../../types';
 import { useDialog } from '../common/Dialogs';
+import { api } from '../../lib/api';
 
 interface AdministracaoModuleProps {
   auditLogs: AuditLog[];
@@ -59,9 +60,9 @@ export const AdministracaoModule: React.FC<AdministracaoModuleProps> = ({
   // AI Configuration State
   const [activeAiProvider, setActiveAiProvider] = useState<'claude' | 'chatgpt' | 'gemini'>('claude');
   const [aiTokens, setAiTokens] = useState({
-    claude: 'sk-ant-api03-P9aLx48K...[Ativo]',
-    chatgpt: 'sk-proj-91aKx882...[Ativo]',
-    gemini: 'AIzaSyA89vLm4...[Injetado automaticamente]',
+    claude: '',
+    chatgpt: '',
+    gemini: '',
   });
   const [showTokens, setShowTokens] = useState<Record<string, boolean>>({
     claude: false,
@@ -95,6 +96,13 @@ export const AdministracaoModule: React.FC<AdministracaoModuleProps> = ({
   );
 
   const [savedSuccessAlert, setSavedSuccessAlert] = useState(false);
+  // Estado REAL: a única IA em uso é o Gemini configurado no servidor (GEMINI_API_KEY).
+  const [serverAi, setServerAi] = useState<boolean | null>(null);
+  useEffect(() => {
+    api<{ aiAvailable: boolean }>('/tenant/db/speeches/meta')
+      .then((m) => setServerAi(!!m.aiAvailable))
+      .catch(() => setServerAi(null));
+  }, []);
 
   // Live triage simulation test
   const [testMessage, setTestMessage] = useState(
@@ -111,23 +119,15 @@ export const AdministracaoModule: React.FC<AdministracaoModuleProps> = ({
   } | null>(null);
   const [isSimulating, setIsSimulating] = useState(false);
 
+  // Teste de conexão ainda não implementado: não simula sucesso.
   const handleTestToken = (provider: 'claude' | 'chatgpt' | 'gemini') => {
-    setTestingProvider(provider);
-    setTestResult(null);
-    setTimeout(() => {
-      const providerNames = {
-        claude: 'Anthropic Claude (3.5 Sonnet)',
-        chatgpt: 'OpenAI ChatGPT (GPT-4o)',
-        gemini: 'Google Gemini (2.5 Flash)',
-      };
-      setTestResult({
-        provider,
-        success: true,
-        latencyMs: Math.floor(Math.random() * 80 + 140),
-        message: `Conexão autenticada com sucesso no endpoint oficial do ${providerNames[provider]}. Quota ativa e pronta para uso.`,
-      });
-      setTestingProvider(null);
-    }, 1100);
+    setTestingProvider(null);
+    setTestResult({
+      provider,
+      success: false,
+      latencyMs: 0,
+      message: 'Teste de conexão não implementado: nenhuma chamada foi feita ao provedor.',
+    });
   };
 
   const handleSimulateTriage = () => {
@@ -148,8 +148,12 @@ export const AdministracaoModule: React.FC<AdministracaoModuleProps> = ({
   };
 
   const handleSaveAiSettings = () => {
-    setSavedSuccessAlert(true);
-    setTimeout(() => setSavedSuccessAlert(false), 4000);
+    dialog.alert({
+      title: 'Configuração ainda não implementada',
+      message:
+        'As opções desta tela ainda não são gravadas nem usadas pelo sistema. Hoje a plataforma usa apenas o Google Gemini configurado no servidor (GEMINI_API_KEY), em Discursos e no Clipping.',
+      tone: 'warning',
+    });
   };
 
   return (
@@ -262,7 +266,7 @@ export const AdministracaoModule: React.FC<AdministracaoModuleProps> = ({
               <div className="flex items-center gap-2">
                 <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
                 <span>
-                  <strong>Configurações de IA salvas com sucesso!</strong> Os módulos de Criação de Documentos, Verificação Constitucional e Triagem da Central de Atendimento estão sincronizados com o provedor <strong>{activeAiProvider.toUpperCase()}</strong>.
+                  Configurações de IA não são gravadas (recurso não implementado).
                 </span>
               </div>
               <button
@@ -283,12 +287,15 @@ export const AdministracaoModule: React.FC<AdministracaoModuleProps> = ({
                     <Sparkles className="w-5 h-5" />
                   </span>
                   <h2 className="text-base font-bold">Motor de Inteligência Artificial do Gabinete</h2>
-                  <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-[#36B7A5] text-[#102C45]">
-                    Ativo & Conectado
+                  <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-300 text-[#102C45]">
+                    Protótipo — configurações não são salvas
                   </span>
                 </div>
                 <p className="text-xs text-slate-200 mt-1.5 max-w-2xl leading-relaxed">
-                  Configure tokens de acesso de APIs de ponta (<strong>Anthropic Claude</strong>, <strong>OpenAI ChatGPT</strong> ou <strong>Google Gemini</strong>). O sistema utiliza os modelos para redigir peças legislativas, auditar normas jurídicas e classificar mensagens de cidadãos em tempo real.
+                  <strong>Estado real:</strong> a plataforma usa somente o <strong>Google Gemini</strong> configurado no servidor
+                  ({serverAi === null ? 'verificando…' : serverAi ? 'chave configurada' : 'sem chave configurada'}), para transcrição/OCR e
+                  classificação em <strong>Discursos</strong> e sentimento/temas no <strong>Clipping</strong>. A escolha de provedor, chaves,
+                  modelos, prompt e os recursos de redação, verificação e triagem abaixo <strong>ainda não estão implementados</strong>.
                 </p>
               </div>
 
@@ -780,10 +787,10 @@ export const AdministracaoModule: React.FC<AdministracaoModuleProps> = ({
               <div>
                 <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
                   <Bot className="w-4 h-4 text-[#176B80]" />
-                  Simulador de Triagem & Tagueamento Inteligente (Central de Atendimento)
+                  Demonstração de Triagem (resultado fixo — não usa IA)
                 </h3>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Teste em tempo real como o modelo configurado ({activeAiProvider.toUpperCase()}) processa demandas de cidadãos de Mato Grosso
+                  Exemplo ilustrativo com resposta pré-definida. Nenhum modelo de IA é consultado.
                 </p>
               </div>
               <button
@@ -792,7 +799,7 @@ export const AdministracaoModule: React.FC<AdministracaoModuleProps> = ({
                 className="px-3.5 py-1.5 bg-[#176B80] hover:bg-[#102C45] text-white text-xs font-bold rounded-lg shadow-xs transition-colors flex items-center gap-1.5 disabled:opacity-50 self-start sm:self-auto cursor-pointer"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isSimulating ? 'animate-spin' : ''}`} />
-                <span>{isSimulating ? 'Processando com IA...' : 'Executar Triagem com IA'}</span>
+                <span>{isSimulating ? 'Carregando exemplo...' : 'Ver exemplo fixo'}</span>
               </button>
             </div>
 
@@ -846,7 +853,7 @@ export const AdministracaoModule: React.FC<AdministracaoModuleProps> = ({
                     </span>
                     {simulatedResult && (
                       <span className="text-[10px] font-mono font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded">
-                        Confiança: {simulatedResult.confianca}%
+                        Exemplo fixo (não é análise real)
                       </span>
                     )}
                   </div>
@@ -876,7 +883,7 @@ export const AdministracaoModule: React.FC<AdministracaoModuleProps> = ({
                     </div>
                   ) : (
                     <div className="py-8 text-center text-slate-400 text-xs">
-                      Clique em <strong>Executar Triagem com IA</strong> para visualizar a classificação de tema, sentimento e sugestão de protocolo.
+                      Clique em <strong>Ver exemplo fixo</strong> para ver um exemplo ilustrativo (não é uma análise real).
                     </div>
                   )}
                 </div>

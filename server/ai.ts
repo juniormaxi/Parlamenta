@@ -106,6 +106,14 @@ async function uploadAndWait(ai: GoogleGenAI, path: string, mimeType: string, di
 
 /** Transcribe audio/video or OCR a PDF. Returns plain text. */
 export async function extractTextWithAI(path: string, mimeType: string, kind: 'audio' | 'video' | 'pdf'): Promise<string> {
+  return (await extractTextWithAIDetailed(path, mimeType, kind)).text;
+}
+
+/**
+ * Same as extractTextWithAI, but also reports whether the model stopped at the output limit
+ * (finishReason MAX_TOKENS), so callers never truncate silently.
+ */
+export async function extractTextWithAIDetailed(path: string, mimeType: string, kind: 'audio' | 'video' | 'pdf'): Promise<{ text: string; truncated: boolean }> {
   const ai = client();
   const file = await uploadAndWait(ai, path, mimeType, `parlamentta-${kind}`);
   try {
@@ -116,7 +124,8 @@ export async function extractTextWithAI(path: string, mimeType: string, kind: 'a
     });
     const text = (res.text ?? '').trim();
     if (!text) throw new Error('A IA retornou uma transcrição vazia.');
-    return text;
+    const truncated = String(res.candidates?.[0]?.finishReason ?? '') === 'MAX_TOKENS';
+    return { text, truncated };
   } finally {
     // Never leave the parliamentarian's material on the provider longer than needed.
     await ai.files.delete({ name: file.name! }).catch(() => undefined);

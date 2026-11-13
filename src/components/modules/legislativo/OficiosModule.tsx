@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   FileText,
-  Sparkles,
   Send,
   CheckCircle2,
   AlertTriangle,
@@ -13,7 +12,6 @@ import {
   Copy,
   Download,
   Plus,
-  RefreshCw,
   Eye,
   Check,
   X,
@@ -110,9 +108,6 @@ export const OficiosModule: React.FC<OficiosModuleProps> = ({ cabinet, logoUrl, 
 
   // Modals state
   const [createModalOpen, setCreateModalOpen] = useState(false);
-  const [verifyModalOpen, setVerifyModalOpen] = useState(false);
-  const [isAiGenerating, setIsAiGenerating] = useState(false);
-  const [isAiVerifying, setIsAiVerifying] = useState(false);
 
   // AI Generator Form
   const [aiForm, setAiForm] = useState({
@@ -132,11 +127,6 @@ export const OficiosModule: React.FC<OficiosModuleProps> = ({ cabinet, logoUrl, 
     body: string;
   } | null>(null);
 
-  // Verification state
-  const [verifyingLetter, setVerifyingLetter] = useState<OfficialLetterModel | null>(null);
-  const [verificationResult, setVerificationResult] = useState<
-    OfficialLetterModel['aiVerification'] | null
-  >(null);
 
   const all = letters ?? [];
   const selectedLetter = all.find((l) => l.id === selectedId) ?? null;
@@ -156,28 +146,30 @@ export const OficiosModule: React.FC<OficiosModuleProps> = ({ cabinet, logoUrl, 
   // Unique orgs
   const uniqueOrgs = Array.from(new Set(all.map((l) => l.recipientOrg).filter(Boolean))).sort();
 
-  // AI Generator Simulator
+  // Rascunho a partir de MODELO FIXO (não usa IA): preenche o texto-padrão com os dados do formulário.
+  const nextLetterCode = () => {
+    const year = new Date().getFullYear();
+    const used = all
+      .map((l) => new RegExp(`^OF-GAB-${year}/(\\d+)$`).exec(l.code)?.[1])
+      .filter(Boolean)
+      .map(Number);
+    return `OF-GAB-${year}/${String((used.length ? Math.max(...used) : 0) + 1).padStart(3, '0')}`;
+  };
   const handleGenerateAiLetter = () => {
     if (!aiForm.subject || !aiForm.recipientName) {
       dialog.alert({ title: 'Campos obrigatórios', message: 'Preencha o destinatário e o assunto da solicitação.', tone: 'warning' });
       return;
     }
+    const origin = aiForm.linkedProtocolId
+      ? `A presente demanda origina-se de solicitação formal protocolada junto a este Gabinete Parlamentar (Protocolo nº ${aiForm.linkedProtocolId})`
+      : 'A presente demanda origina-se de solicitação recebida por este Gabinete Parlamentar';
+    const bodyText = `Excelentíssimo Senhor ${aiForm.recipientRole},
 
-    setIsAiGenerating(true);
-    setTimeout(() => {
-      const year = new Date().getFullYear();
-      const randNum = Math.floor(Math.random() * 200 + 150);
-      const code = `OF-GAB-${year}/${randNum}`;
+Cumprimentando-o cordialmente, sirvo-me do presente para solicitar a Vossa Excelência especial atenção e providências no sentido de viabilizar ${aiForm.subject.toLowerCase()}${aiForm.cityTarget ? ` no município de ${aiForm.cityTarget}` : ''}.
 
-      const bodyText = `Excelentíssimo Senhor ${aiForm.recipientRole},
+${origin}${aiForm.contextDemand ? `, cujo relato informa que ${aiForm.contextDemand}` : ''}.
 
-Cumprimentando-o cordialmente, sirvo-me do presente para solicitar a Vossa Excelência especial atenção e providências urgentes no sentido de viabilizar ${aiForm.subject.toLowerCase()} no município de ${aiForm.cityTarget}.
-
-A presente demanda origina-se de solicitação formal protocolada junto a este Gabinete Parlamentar (Protocolo Parlamentta nº ${aiForm.linkedProtocolId || 'PRT-2026-GAB'}), subscrita por lideranças comunitárias e gestores locais, os quais relatam que ${aiForm.contextDemand}.
-
-Ressalta-se que este Mandato Parlamentar acompanha com prioridade as ações voltadas ao fortalecimento das políticas públicas no interior de Mato Grosso, colocando-se à disposição para alocação de emenda parlamentar impositiva com vistas a cofinanciar a referida intervenção.
-
-Diante do exposto e com espeque nas atribuições fiscalizatórias conferidas pelo Art. 47 da Constituição do Estado de Mato Grosso, solicito manifestação conclusiva desta pasta no prazo regimental de ${aiForm.deadlineDays} (quinze) dias.
+Diante do exposto, solicito manifestação desta pasta no prazo de ${aiForm.deadlineDays} dias.
 
 Renovando protestos de estima e consideração.
 
@@ -185,14 +177,7 @@ Respeitosamente,
 
 ${cabinet.parliamentarian || cabinet.name}
 ${cabinet.house || 'Assembleia Legislativa'}`;
-
-      setGeneratedDraft({
-        code,
-        subject: aiForm.subject,
-        body: bodyText,
-      });
-      setIsAiGenerating(false);
-    }, 1100);
+    setGeneratedDraft({ code: nextLetterCode(), subject: aiForm.subject, body: bodyText });
   };
 
   const handleSaveDraftAsLetter = async () => {
@@ -210,17 +195,6 @@ ${cabinet.house || 'Assembleia Legislativa'}`;
       body: generatedDraft.body,
       deadlineResponseDays: aiForm.deadlineDays,
       linkedProtocolId: aiForm.linkedProtocolId,
-      aiVerification: {
-        institutionalToneScore: 97,
-        protocolaryCompliance: 'aprovado',
-        formalityCheck: 'Tratamento vocativo e pronomes plenamente alinhados ao Manual de Redação da Presidência e ALMT.',
-        clarityCheck: 'Solicitação delimitada com prazo regimental expresso e fundamentação fática.',
-        missingReferences: [],
-        recommendations: [
-          'Ofício pronto para assinatura digital da Deputada e envio pelo sistema oficial de protocolo (SIGA-MT).',
-        ],
-        verifiedAt: new Date().toLocaleString('pt-BR'),
-      },
     };
 
     try {
@@ -231,40 +205,6 @@ ${cabinet.house || 'Assembleia Legislativa'}`;
     } catch (e) {
       dialog.alert({ title: 'Erro ao salvar o ofício', message: (e as Error).message, tone: 'danger' });
     }
-  };
-
-  // AI Verifier Simulator
-  const handleRunAiVerification = (letter: OfficialLetterModel) => {
-    setVerifyingLetter(letter);
-    setVerifyModalOpen(true);
-    setIsAiVerifying(true);
-    setVerificationResult(null);
-
-    setTimeout(async () => {
-      const result: OfficialLetterModel['aiVerification'] = {
-        institutionalToneScore: 96,
-        protocolaryCompliance: 'aprovado',
-        formalityCheck: `Conformidade rigorosa com os padrões de correspondência oficial para órgãos públicos de Mato Grosso. Vocativo inicial "${letter.body.split('\n')[0]}" adequado ao destinatário ${letter.recipientRole}.`,
-        clarityCheck: 'Delimitação clara do objeto, indicação de prazo e citação da prerrogativa fiscalizatória parlamentar.',
-        missingReferences: letter.linkedProtocolId
-          ? []
-          : ['Sugestão: vincular expressamente a um protocolo de atendimento cidadão do Gabinete.'],
-        recommendations: [
-          'Tom institucional sóbrio, objetivo e respeitoso.',
-          'Anexar eventuais fotos ou laudos da comunidade para acelerar o despacho no órgão.',
-        ],
-        verifiedAt: new Date().toLocaleString('pt-BR'),
-      };
-
-      setVerificationResult(result);
-      setIsAiVerifying(false);
-
-      try {
-        await saveLetter(letter.id, { ...letter, aiVerification: result });
-      } catch (e) {
-        dialog.alert({ title: 'Erro ao salvar a verificação', message: (e as Error).message, tone: 'danger' });
-      }
-    }, 1000);
   };
 
   return (
@@ -280,9 +220,6 @@ ${cabinet.house || 'Assembleia Legislativa'}`;
             <div>
               <h1 className="text-lg font-bold text-slate-900 tracking-tight flex items-center gap-2">
                 Ofícios Expedidos do Mandato
-                <span className="text-[11px] font-mono px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold">
-                  IA Redação & Verificação
-                </span>
               </h1>
               <p className="text-xs text-slate-500">
                 Encaminhamento de demandas populares a órgãos do Poder Executivo, cobrança de prazos e respostas oficiais
@@ -313,8 +250,8 @@ ${cabinet.house || 'Assembleia Legislativa'}`;
             onClick={() => setCreateModalOpen(true)}
             className="px-3.5 py-1.5 text-xs font-semibold text-white bg-[#102C45] hover:bg-[#176B80] rounded-lg transition-colors flex items-center gap-1.5 shadow-xs"
           >
-            <Sparkles className="w-3.5 h-3.5 text-[#36B7A5]" />
-            <span>Criar Ofício com IA</span>
+            <FileText className="w-3.5 h-3.5 text-[#36B7A5]" />
+            <span>Rascunho por modelo</span>
           </button>
         </div>
       </div>
@@ -374,7 +311,7 @@ ${cabinet.house || 'Assembleia Legislativa'}`;
           )}
           {letters && filteredLetters.length === 0 && (
             <div className="bg-white border border-slate-200 rounded-xl p-8 text-center text-xs text-slate-500">
-              {all.length ? 'Nenhum ofício com esses filtros.' : 'Nenhum ofício ainda. Use “Novo ofício” ou “Criar Ofício com IA”.'}
+              {all.length ? 'Nenhum ofício com esses filtros.' : 'Nenhum ofício ainda. Use “Novo ofício” ou “Rascunho por modelo”.'}
             </div>
           )}
           {filteredLetters.map((letter) => {
@@ -432,12 +369,6 @@ ${cabinet.house || 'Assembleia Legislativa'}`;
                     <MapPin className="w-3 h-3 text-slate-400" />
                     {letter.cityTarget || cabinet.state || '—'} · {fmtLetterDate(letter.date)}
                   </span>
-                  {letter.aiVerification && (
-                    <span className="flex items-center gap-1 font-mono font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200">
-                      <ShieldCheck className="w-3 h-3 text-emerald-600" />
-                      {letter.aiVerification.institutionalToneScore}% Tom Oficial
-                    </span>
-                  )}
                 </div>
               </div>
             );
@@ -472,11 +403,12 @@ ${cabinet.house || 'Assembleia Legislativa'}`;
                     <span>Editar</span>
                   </button>
                   <button
-                    onClick={() => handleRunAiVerification(selectedLetter)}
-                    className="px-3 py-1.5 text-xs font-semibold text-white bg-[#176B80] hover:bg-[#102C45] rounded-lg transition-colors flex items-center gap-1.5 shadow-xs"
+                    disabled
+                    className="px-3 py-1.5 text-xs font-semibold text-slate-400 bg-slate-100 rounded-lg flex items-center gap-1.5 cursor-not-allowed"
+                    title="Ainda não implementado: nenhuma análise por IA é feita sobre os ofícios."
                   >
                     <ShieldCheck className="w-3.5 h-3.5" />
-                    <span>Verificar com IA</span>
+                    <span>Verificar com IA (não implementado)</span>
                   </button>
                   <button
                     onClick={() => {
@@ -515,23 +447,6 @@ ${cabinet.house || 'Assembleia Legislativa'}`;
                 </div>
               </div>
 
-              {/* AI Verification Banner */}
-              {selectedLetter.aiVerification && (
-                <div className="p-3 bg-emerald-50/70 border border-emerald-200 rounded-xl text-xs space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-emerald-950 flex items-center gap-1.5">
-                      <ShieldCheck className="w-4 h-4 text-emerald-600" />
-                      Verificação de Conformidade Institucional (Manual de Redação Oficial)
-                    </span>
-                    <span className="font-mono font-bold text-emerald-900">
-                      {selectedLetter.aiVerification.institutionalToneScore}/100
-                    </span>
-                  </div>
-                  <p className="text-slate-700 leading-relaxed">
-                    {selectedLetter.aiVerification.formalityCheck}
-                  </p>
-                </div>
-              )}
 
               {/* Recipient Metadata */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3 bg-slate-50 rounded-lg border border-slate-200 text-xs">
@@ -588,14 +503,14 @@ ${cabinet.house || 'Assembleia Legislativa'}`;
             <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50 rounded-t-2xl">
               <div className="flex items-center gap-2">
                 <span className="p-2 rounded-lg bg-[#102C45] text-white">
-                  <Sparkles className="w-4 h-4 text-[#36B7A5]" />
+                  <FileText className="w-4 h-4 text-[#36B7A5]" />
                 </span>
                 <div>
                   <h3 className="font-bold text-slate-900 text-base">
-                    Criar Novo Ofício Oficial com IA
+                    Rascunho de ofício a partir de modelo
                   </h3>
                   <p className="text-xs text-slate-500">
-                    Assistente para redação institucional com vocativo adequado e fundamentação regimental
+                    Preenche um texto-padrão fixo com os dados abaixo. Não usa inteligência artificial — revise o texto antes de enviar.
                   </p>
                 </div>
               </div>
@@ -714,20 +629,10 @@ ${cabinet.house || 'Assembleia Legislativa'}`;
                 <button
                   type="button"
                   onClick={handleGenerateAiLetter}
-                  disabled={isAiGenerating}
                   className="px-5 py-2.5 text-xs font-bold text-white bg-[#102C45] hover:bg-[#176B80] rounded-xl transition-all shadow-xs flex items-center gap-2 disabled:opacity-50"
                 >
-                  {isAiGenerating ? (
-                    <>
-                      <RefreshCw className="w-4 h-4 animate-spin text-[#36B7A5]" />
-                      <span>Formatando Ofício com Padrão Oficial...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles className="w-4 h-4 text-[#36B7A5]" />
-                      <span>Gerar Minuta do Ofício com IA</span>
-                    </>
-                  )}
+                  <FileText className="w-4 h-4 text-[#36B7A5]" />
+                  <span>Preencher modelo</span>
                 </button>
               </div>
 
@@ -739,7 +644,7 @@ ${cabinet.house || 'Assembleia Legislativa'}`;
                     </span>
                     <span className="text-xs font-bold text-emerald-700 flex items-center gap-1">
                       <CheckCircle2 className="w-3.5 h-3.5" />
-                      Ofício Gerado
+                      Rascunho preenchido (revise antes de salvar)
                     </span>
                   </div>
 
@@ -767,80 +672,6 @@ ${cabinet.house || 'Assembleia Legislativa'}`;
                 </div>
               )}
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* ============================================================ */}
-      {/* MODAL: VERIFICADOR DE OFÍCIO COM IA                          */}
-      {/* ============================================================ */}
-      {verifyModalOpen && verifyingLetter && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
-          <div className="bg-white rounded-2xl max-w-xl w-full p-6 shadow-2xl border border-slate-200 space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <div className="flex items-center gap-2">
-                <span className="p-1.5 rounded-lg bg-emerald-100 text-emerald-800">
-                  <ShieldCheck className="w-5 h-5 text-emerald-700" />
-                </span>
-                <div>
-                  <h3 className="font-bold text-slate-900 text-base">
-                    Auditoria Institucional de Ofício — {verifyingLetter.code}
-                  </h3>
-                  <p className="text-xs text-slate-500">
-                    Avaliação de tom oficial, clareza do despacho e normas protocolares
-                  </p>
-                </div>
-              </div>
-              <button onClick={() => setVerifyModalOpen(false)} className="text-slate-400 hover:text-slate-600">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {isAiVerifying ? (
-              <div className="py-12 flex flex-col items-center justify-center text-center space-y-3">
-                <RefreshCw className="w-8 h-8 animate-spin text-[#176B80]" />
-                <p className="text-xs font-medium text-slate-600">
-                  Auditando vocativo, enquadramento fático e prazos segundo o Manual de Redação Oficial...
-                </p>
-              </div>
-            ) : verificationResult ? (
-              <div className="space-y-4 text-xs">
-                <div className="bg-emerald-50 border border-emerald-200 p-3 rounded-xl text-center">
-                  <span className="text-[10px] uppercase font-bold text-emerald-800 block">
-                    Conformidade Protocolar & Tom Institucional
-                  </span>
-                  <span className="text-2xl font-bold font-mono text-emerald-950">
-                    {verificationResult.institutionalToneScore}%
-                  </span>
-                </div>
-
-                <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-1">
-                  <span className="font-bold text-slate-800 block">Avaliação Técnica:</span>
-                  <p className="text-slate-600 leading-relaxed">{verificationResult.formalityCheck}</p>
-                </div>
-
-                <div className="space-y-1.5">
-                  <span className="font-bold text-slate-800 block">Recomendações Práticas:</span>
-                  <ul className="space-y-1">
-                    {verificationResult.recommendations.map((rec, i) => (
-                      <li key={i} className="flex items-start gap-1.5 text-slate-700">
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
-                        <span>{rec}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-
-                <div className="pt-3 border-t border-slate-100 flex justify-end">
-                  <button
-                    onClick={() => setVerifyModalOpen(false)}
-                    className="px-4 py-2 font-semibold text-white bg-[#102C45] hover:bg-[#176B80] rounded-lg shadow-xs"
-                  >
-                    Concluir Auditoria
-                  </button>
-                </div>
-              </div>
-            ) : null}
           </div>
         </div>
       )}
