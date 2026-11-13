@@ -23,6 +23,7 @@ import { useDialog } from '../common/Dialogs';
 import { api } from '../../lib/api';
 import { MunicipioAutocomplete } from '../common/MunicipioAutocomplete';
 import type { Taxonomy, EntryChannel } from './banco/ui';
+import { WhatsAppModule, type ProtocolPrefill } from './WhatsAppModule';
 
 /** Tag aplicada a todo atendimento criado em "Registrar Manual". */
 export const MANUAL_ENTRY_TAG = 'Lançado Manualmente';
@@ -54,6 +55,12 @@ interface AtendimentoModuleProps {
   onCreateManualEntry: (data: ManualEntryData) => void;
   canManageChannels?: boolean;
   onManageChannels?: () => void;
+  /** Aba inicial (ex.: 'whatsapp' quando vem de Canais & Integrações). */
+  initialChannelFilter?: string;
+  /** Aba WhatsApp: conversas reais do número conectado em Canais & Integrações. */
+  onOpenWhatsAppProtocol: (prefill: ProtocolPrefill) => void;
+  onWhatsAppUnreadChange?: (n: number) => void;
+  onOpenIntegracoes?: () => void;
 }
 
 export const AtendimentoModule: React.FC<AtendimentoModuleProps> = ({
@@ -63,9 +70,13 @@ export const AtendimentoModule: React.FC<AtendimentoModuleProps> = ({
   onCreateManualEntry,
   canManageChannels = false,
   onManageChannels,
+  initialChannelFilter = 'todos',
+  onOpenWhatsAppProtocol,
+  onWhatsAppUnreadChange,
+  onOpenIntegracoes,
 }) => {
   const dialog = useDialog();
-  const [activeChannelFilter, setActiveChannelFilter] = useState<string>('todos');
+  const [activeChannelFilter, setActiveChannelFilter] = useState<string>(initialChannelFilter);
   const [searchFilter, setSearchFilter] = useState<string>('');
   const [selectedConvId, setSelectedConvId] = useState<string>(
     conversations[0]?.id || ''
@@ -196,9 +207,41 @@ export const AtendimentoModule: React.FC<AtendimentoModuleProps> = ({
     }
   };
 
+  const channelTabs = [
+    { id: 'todos', label: 'Todos' },
+    { id: 'whatsapp', label: 'WhatsApp' },
+    { id: 'email', label: 'E-mail' },
+    { id: 'instagram', label: 'Instagram' },
+    { id: 'presencial', label: 'Presencial' },
+  ];
+
   return (
     <div className="space-y-4">
+      {/* Abas de canal */}
+      <div className="inline-flex items-center gap-1 p-1 bg-slate-100 border border-slate-200 rounded-lg overflow-x-auto max-w-full">
+        {channelTabs.map((tab) => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveChannelFilter(tab.id)}
+            className={`px-3 py-1.5 text-xs font-medium rounded-md whitespace-nowrap transition-colors ${
+              activeChannelFilter === tab.id
+                ? 'bg-white text-slate-900 shadow-xs font-semibold'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
 
+      {activeChannelFilter === 'whatsapp' ? (
+        <WhatsAppModule
+          onOpenProtocol={onOpenWhatsAppProtocol}
+          onUnreadChange={onWhatsAppUnreadChange}
+          onOpenIntegracoes={onOpenIntegracoes}
+        />
+      ) : (
+      <>
       {/* Main Inbox Container */}
       <div className="bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden flex flex-col md:flex-row h-[720px]">
         {/* Left List Pane: Channels, search and conversations list */}
@@ -231,29 +274,6 @@ export const AtendimentoModule: React.FC<AtendimentoModuleProps> = ({
                 className="w-full pl-8 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-800 placeholder:text-slate-400 focus:outline-hidden focus:ring-1 focus:ring-[#176B80]"
               />
             </div>
-          </div>
-
-          {/* Filter Bar (Segmented Controls) */}
-          <div className="px-3 py-2 bg-slate-100 border-b border-slate-200 flex items-center gap-1 overflow-x-auto">
-            {[
-              { id: 'todos', label: 'Todos' },
-              { id: 'whatsapp', label: 'WhatsApp' },
-              { id: 'email', label: 'E-mail' },
-              { id: 'instagram', label: 'Instagram' },
-              { id: 'presencial', label: 'Presencial' },
-            ].map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveChannelFilter(tab.id)}
-                className={`px-2.5 py-1 text-[11px] font-medium rounded-md whitespace-nowrap transition-colors ${
-                  activeChannelFilter === tab.id
-                    ? 'bg-white text-slate-900 shadow-xs font-semibold'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
           </div>
 
           {/* Conversations List */}
@@ -487,6 +507,8 @@ export const AtendimentoModule: React.FC<AtendimentoModuleProps> = ({
           </div>
         )}
       </div>
+      </>
+      )}
 
       {/* Modal: Confirmação Humana de Criação de Protocolo */}
       {protocolModalOpen && (

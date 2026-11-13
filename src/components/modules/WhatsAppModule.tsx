@@ -20,11 +20,12 @@ import {
   BellRing,
   Settings2,
   AlertTriangle,
+  WifiOff,
 } from 'lucide-react';
 import { uploadFile } from '../../lib/api';
 import { wa, formatPhone, localPhone, type WhatsAppChat, type WhatsAppMessage, type WhatsAppOutboxItem } from '../../lib/whatsapp';
 import { useDialog } from '../common/Dialogs';
-import { WhatsAppConnection, useWhatsAppStatus } from './whatsapp/WhatsAppConnection';
+import { useWhatsAppStatus } from './whatsapp/WhatsAppConnection';
 
 export interface ProtocolPrefill {
   citizenName: string;
@@ -37,9 +38,11 @@ export interface ProtocolPrefill {
 interface Props {
   onOpenProtocol: (prefill: ProtocolPrefill) => void;
   onUnreadChange?: (n: number) => void;
+  /** Leva o usuário a Canais & Integrações, onde o número é conectado. */
+  onOpenIntegracoes?: () => void;
 }
 
-type Tab = 'conversas' | 'alertas' | 'conexao';
+type Tab = 'conversas' | 'alertas';
 
 const time = (iso: string | null) => {
   if (!iso) return '';
@@ -58,9 +61,9 @@ const MEDIA: Record<string, [React.ElementType, string]> = {
   sticker: [ImageIcon, 'Figurinha'],
 };
 
-export const WhatsAppModule: React.FC<Props> = ({ onOpenProtocol, onUnreadChange }) => {
+export const WhatsAppModule: React.FC<Props> = ({ onOpenProtocol, onUnreadChange, onOpenIntegracoes }) => {
   const dialog = useDialog();
-  const { status, error, refresh } = useWhatsAppStatus(15_000);
+  const { status, error } = useWhatsAppStatus(15_000);
   const connected = status?.status === 'connected';
   const [tab, setTab] = useState<Tab>('conversas');
 
@@ -240,9 +243,8 @@ export const WhatsAppModule: React.FC<Props> = ({ onOpenProtocol, onUnreadChange
   const tabs: [Tab, string, React.ElementType][] = [
     ['conversas', 'Conversas', MessageCircle],
     ['alertas', 'Alertas automáticos', BellRing],
-    ['conexao', 'Conexão', Settings2],
   ];
-  const activeTab: Tab = !connected && tab === 'conversas' ? 'conexao' : tab;
+  const activeTab: Tab = tab;
 
   return (
     <div className="space-y-4">
@@ -268,7 +270,6 @@ export const WhatsAppModule: React.FC<Props> = ({ onOpenProtocol, onUnreadChange
             <button
               key={id}
               onClick={() => setTab(id)}
-              disabled={id === 'conversas' && !connected}
               className={`px-3 py-1.5 rounded-md font-semibold flex items-center gap-1.5 disabled:opacity-40 ${
                 activeTab === id ? 'bg-[#102C45] text-white' : 'text-slate-600 hover:bg-slate-50'
               }`}
@@ -279,14 +280,42 @@ export const WhatsAppModule: React.FC<Props> = ({ onOpenProtocol, onUnreadChange
         </div>
       </div>
 
-      {activeTab === 'conexao' && <WhatsAppConnection status={status} error={error} refresh={refresh} />}
+      {activeTab === 'conversas' && !connected && (
+        <div className="bg-white border border-slate-200 rounded-xl p-8 text-center space-y-3">
+          {!status && !error ? (
+            <p className="text-xs text-slate-500 flex items-center justify-center gap-2">
+              <Loader2 className="w-4 h-4 animate-spin" /> Verificando a conexão do WhatsApp…
+            </p>
+          ) : (
+            <>
+              <WifiOff className="w-8 h-8 text-slate-300 mx-auto" />
+              <div>
+                <p className="text-sm font-semibold text-slate-800">
+                  {status?.status === 'pairing' ? 'Pareamento em andamento' : 'WhatsApp do gabinete não conectado'}
+                </p>
+                <p className="text-xs text-slate-500 mt-1">
+                  {error ?? 'Conecte o número oficial em Canais & Integrações para ver e responder as conversas aqui.'}
+                </p>
+              </div>
+              {onOpenIntegracoes && (
+                <button
+                  onClick={onOpenIntegracoes}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-[#102C45] text-white hover:bg-[#0b2034]"
+                >
+                  <Settings2 className="w-3.5 h-3.5" /> Ir para Canais & Integrações
+                </button>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       {activeTab === 'alertas' && (
         <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
           <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
             <p className="text-xs text-slate-600">
               Mensagens enviadas automaticamente ao cidadão quando um protocolo é aberto, muda de situação ou recebe resposta.
-              {status && !status.alertsEnabled && <strong className="text-amber-700"> Os alertas estão desativados (aba Conexão).</strong>}
+              {status && !status.alertsEnabled && <strong className="text-amber-700"> Os alertas estão desativados (Canais & Integrações).</strong>}
             </p>
             <button onClick={loadOutbox} className="text-slate-500 hover:text-slate-800" title="Atualizar">
               <RefreshCw className="w-4 h-4" />

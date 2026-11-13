@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Sliders,
   CheckCircle2,
@@ -12,14 +12,16 @@ import {
   Mail,
   Camera,
   Database,
+  X,
 } from 'lucide-react';
 import { useDialog } from '../common/Dialogs';
-import { useWhatsAppStatus } from './whatsapp/WhatsAppConnection';
+import { WhatsAppConnection, useWhatsAppStatus } from './whatsapp/WhatsAppConnection';
 import { formatPhone } from '../../lib/whatsapp';
 
 export const IntegracoesModule: React.FC<{ onOpenWhatsApp?: () => void }> = ({ onOpenWhatsApp }) => {
   const dialog = useDialog();
-  const { status: waStatus } = useWhatsAppStatus(30_000);
+  const { status: waStatus, error: waError, refresh: waRefresh } = useWhatsAppStatus(30_000);
+  const [waPanelOpen, setWaPanelOpen] = useState(false);
   const waLabel = !waStatus
     ? 'Verificando…'
     : !waStatus.installed
@@ -143,9 +145,16 @@ export const IntegracoesModule: React.FC<{ onOpenWhatsApp?: () => void }> = ({ o
                   {item.id === 'whatsapp' ? 'Pareamento por QR code · sem token da Meta' : 'Autenticação segura via Token / OAuth'}
                 </span>
                 {item.id === 'whatsapp' ? (
-                  <button onClick={onOpenWhatsApp} className="text-xs text-[#176B80] hover:underline font-semibold">
-                    {waOk ? 'Abrir conversas' : 'Conectar número'}
-                  </button>
+                  <div className="flex items-center gap-3">
+                    {waOk && onOpenWhatsApp && (
+                      <button onClick={onOpenWhatsApp} className="text-xs text-[#176B80] hover:underline font-semibold">
+                        Abrir conversas
+                      </button>
+                    )}
+                    <button onClick={() => setWaPanelOpen(true)} className="text-xs text-[#176B80] hover:underline font-semibold">
+                      {waOk ? 'Gerenciar conexão' : 'Conectar número'}
+                    </button>
+                  </div>
                 ) : (
                   <button
                     onClick={() =>
@@ -161,6 +170,34 @@ export const IntegracoesModule: React.FC<{ onOpenWhatsApp?: () => void }> = ({ o
           );
         })}
       </div>
+
+      {/* Painel de conexão do WhatsApp (QR code / código no telefone, desconectar, alertas) */}
+      {waPanelOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 flex items-start md:items-center justify-center p-4 overflow-y-auto" onClick={() => setWaPanelOpen(false)}>
+          <div className="w-full max-w-2xl bg-slate-50 rounded-xl shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="px-4 py-3 border-b border-slate-200 bg-white rounded-t-xl flex items-center justify-between">
+              <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                <MessageSquare className="w-4 h-4 text-emerald-600" /> WhatsApp do Gabinete · Conexão
+              </h2>
+              <button onClick={() => setWaPanelOpen(false)} className="text-slate-400 hover:text-slate-700" title="Fechar">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-4 space-y-3">
+              <WhatsAppConnection status={waStatus} error={waError} refresh={waRefresh} />
+              {waOk && onOpenWhatsApp && (
+                <p className="text-xs text-slate-600">
+                  As conversas ficam em{' '}
+                  <button onClick={onOpenWhatsApp} className="text-[#176B80] font-semibold hover:underline">
+                    Central de Atendimento › WhatsApp
+                  </button>
+                  .
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

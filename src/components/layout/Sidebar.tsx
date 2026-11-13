@@ -27,7 +27,6 @@ import {
   FolderTree,
   Mic,
   Rss,
-  MessageCircle,
 } from 'lucide-react';
 import { ModuleType, Cabinet } from '../../types';
 
@@ -41,7 +40,6 @@ interface SidebarProps {
   customLogoUrl?: string;
   badgeCounts: {
     atendimento: number;
-    whatsapp?: number;
     protocolosAtrasados: number;
     flowAlertas: number;
   };
@@ -75,13 +73,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
       label: 'Central de Atendimento',
       icon: MessageSquare,
       badge: badgeCounts.atendimento,
-      group: 'principal',
-    },
-    {
-      id: 'whatsapp',
-      label: 'WhatsApp',
-      icon: MessageCircle,
-      badge: badgeCounts.whatsapp,
       group: 'principal',
     },
     {

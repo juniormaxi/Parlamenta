@@ -76,7 +76,7 @@ import { ParlamentoHemicicloModule } from './components/modules/legislativo/Parl
 import { ProjetosLeiModule } from './components/modules/legislativo/ProjetosLeiModule';
 import { OficiosModule } from './components/modules/legislativo/OficiosModule';
 import { IntegracoesModule } from './components/modules/IntegracoesModule';
-import { WhatsAppModule, type ProtocolPrefill } from './components/modules/WhatsAppModule';
+import type { ProtocolPrefill } from './components/modules/WhatsAppModule';
 import { wa } from './lib/whatsapp';
 import { RelatoriosModule } from './components/modules/RelatoriosModule';
 import { AdministracaoModule } from './components/modules/AdministracaoModule';
@@ -535,7 +535,6 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
   const moduleTitles: Record<ModuleType, string> = {
     dashboard: 'Visão Geral & Métricas',
     atendimento: 'Central de Atendimento Omnichannel',
-    whatsapp: 'Atendimento · WhatsApp',
     protocolos: 'Protocolos & Demandas',
     flow: 'Parlamentta Flow (Workflow)',
     agenda: 'Agenda & Minhas Tarefas',
@@ -562,6 +561,12 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
   // WhatsApp: conversas não lidas no menu (o módulo atualiza mais rápido enquanto aberto).
   const [whatsappUnread, setWhatsappUnread] = useState(0);
   const [protocolPrefill, setProtocolPrefill] = useState<ProtocolPrefill | undefined>(undefined);
+  // Aba aberta na Central de Atendimento ('whatsapp' quando vem de Canais & Integrações).
+  const [atendimentoTab, setAtendimentoTab] = useState('todos');
+  const openAtendimentoWhatsApp = () => {
+    setAtendimentoTab('whatsapp');
+    setCurrentModule('atendimento');
+  };
   useEffect(() => {
     const load = () =>
       wa
@@ -593,6 +598,7 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
         onSelectModule={(mod) => {
           setContactsFilter({});
           setCategoriasTab('categorias');
+          setAtendimentoTab('todos');
           setCurrentModule(mod);
           setMobileMenuOpen(false);
         }}
@@ -602,8 +608,7 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
         onOpenLogoModal={() => setLogoModalOpen(true)}
         customLogoUrl={customLogoUrl}
         badgeCounts={{
-          atendimento: unreadMessagesCount,
-          whatsapp: whatsappUnread,
+          atendimento: unreadMessagesCount + whatsappUnread,
           protocolosAtrasados: overdueProtocolsCount,
           flowAlertas: flowAlertsCount,
         }}
@@ -652,6 +657,14 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
               onCreateManualEntry={handleCreateManualEntry}
               canManageChannels={canManageDb}
               onManageChannels={() => openCategorias('canais')}
+              key={atendimentoTab}
+              initialChannelFilter={atendimentoTab}
+              onOpenWhatsAppProtocol={(prefill) => {
+                setProtocolPrefill(prefill);
+                setNewProtocolModalOpen(true);
+              }}
+              onWhatsAppUnreadChange={setWhatsappUnread}
+              onOpenIntegracoes={() => setCurrentModule('integracoes')}
             />
           )}
 
@@ -763,17 +776,7 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
             />
           )}
 
-          {currentModule === 'whatsapp' && (
-            <WhatsAppModule
-              onUnreadChange={setWhatsappUnread}
-              onOpenProtocol={(prefill) => {
-                setProtocolPrefill(prefill);
-                setNewProtocolModalOpen(true);
-              }}
-            />
-          )}
-
-          {currentModule === 'integracoes' && <IntegracoesModule onOpenWhatsApp={() => setCurrentModule('whatsapp')} />}
+          {currentModule === 'integracoes' && <IntegracoesModule onOpenWhatsApp={openAtendimentoWhatsApp} />}
 
           {currentModule === 'relatorios' && <RelatoriosModule />}
 
