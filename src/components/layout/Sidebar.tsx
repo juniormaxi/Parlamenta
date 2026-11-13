@@ -27,6 +27,7 @@ import {
   FolderTree,
   Mic,
   Rss,
+  Target,
 } from 'lucide-react';
 import { ModuleType, Cabinet } from '../../types';
 
@@ -99,6 +100,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'legislativo_oficios', label: 'Ofícios', icon: Send, group: 'legislativo' },
     { id: 'legislativo_parlamento', label: 'Composição Plenário', icon: Landmark, group: 'legislativo' },
 
+    { id: 'crm', label: 'CRM', icon: Target, group: 'comunicacao' },
     { id: 'newsletter', label: 'Newsletter', icon: Mail, group: 'comunicacao' },
     { id: 'imprensa', label: 'Conhecimento & Imprensa', icon: Newspaper, group: 'comunicacao' },
     { id: 'clipping', label: 'Clipping', icon: Rss, group: 'comunicacao' },

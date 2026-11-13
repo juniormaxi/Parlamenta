@@ -71,6 +71,7 @@ import { NewsletterModule } from './components/modules/NewsletterModule';
 import { ConhecimentoImprensaModule } from './components/modules/ConhecimentoImprensaModule';
 import { SiteCmsModule } from './components/modules/SiteCmsModule';
 import { ClippingModule } from './components/modules/ClippingModule';
+import { CrmModule } from './components/modules/CrmModule';
 import { GestaoLegislativaModule } from './components/modules/GestaoLegislativaModule';
 import { ParlamentoHemicicloModule } from './components/modules/legislativo/ParlamentoHemicicloModule';
 import { ProjetosLeiModule } from './components/modules/legislativo/ProjetosLeiModule';
@@ -545,6 +546,7 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
     equipe: 'Gestão da Equipe',
     territorial: 'Inteligência Territorial (MT)',
     documentos: 'Documentos do Gabinete',
+    crm: 'Comunicação · CRM',
     newsletter: 'Comunicação · Newsletter & Campanhas',
     imprensa: 'Comunicação · Conhecimento & Imprensa',
     site: 'Comunicação · Site & Publicações CMS',
@@ -747,6 +749,8 @@ function CabinetWorkspace({ session, onLogout }: { session: Session; onLogout: (
           )}
 
           {currentModule === 'clipping' && <ClippingModule />}
+
+          {currentModule === 'crm' && <CrmModule onOpenIntegracoes={() => setCurrentModule('integracoes')} />}
 
           {currentModule === 'site' && (
             <SiteCmsModule

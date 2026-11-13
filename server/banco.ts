@@ -49,7 +49,7 @@ async function assertQuota(tenantId: string, extraBytes: number) {
 }
 
 /** Reads a small raw request body into memory, with a hard size limit. */
-function readBody(req: Request, limit: number): Promise<Buffer> {
+export function readBody(req: Request, limit: number): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
@@ -605,7 +605,7 @@ function parseCsv(text: string): string[][] {
   return rows;
 }
 
-async function readSheet(buf: Buffer, fileName: string): Promise<unknown[][]> {
+export async function readSheet(buf: Buffer, fileName: string): Promise<unknown[][]> {
   if (/\.csv$/i.test(fileName)) {
     let text = buf.toString('utf8');
     if (text.includes('�')) text = buf.toString('latin1');

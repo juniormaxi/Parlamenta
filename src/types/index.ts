@@ -1,6 +1,7 @@
 export type ModuleType =
   | 'dashboard'
   | 'atendimento'
+  | 'crm'
   | 'protocolos'
   | 'flow'
   | 'agenda'

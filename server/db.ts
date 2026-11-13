@@ -499,6 +499,50 @@ const SCHEMA = `
     errors      TEXT NOT NULL DEFAULT '[]'
   );
   CREATE INDEX IF NOT EXISTS idx_clip_runs_tenant ON clipping_runs(tenant_id, started_at);
+
+  -- Comunicação › CRM: leads importados de planilha e distribuídos entre os usuários.
+  CREATE TABLE IF NOT EXISTS crm_imports (
+    id          TEXT PRIMARY KEY,
+    tenant_id   TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    file_name   TEXT NOT NULL DEFAULT '',
+    total       INTEGER NOT NULL DEFAULT 0,
+    created_by  TEXT REFERENCES users(id) ON DELETE SET NULL,
+    created_at  TEXT NOT NULL DEFAULT datetime('now')
+  );
+  CREATE TABLE IF NOT EXISTS crm_leads (
+    id              TEXT PRIMARY KEY,
+    tenant_id       TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    import_id       TEXT REFERENCES crm_imports(id) ON DELETE CASCADE,
+    name            TEXT NOT NULL,
+    email           TEXT NOT NULL DEFAULT '',
+    phone           TEXT NOT NULL DEFAULT '',
+    city            TEXT NOT NULL DEFAULT '',
+    notes           TEXT NOT NULL DEFAULT '',
+    agent_notes     TEXT NOT NULL DEFAULT '',
+    status          TEXT NOT NULL DEFAULT 'novo',
+    status_at       TEXT,
+    status_by       TEXT REFERENCES users(id) ON DELETE SET NULL,
+    assigned_to     TEXT REFERENCES users(id) ON DELETE SET NULL,
+    assigned_at     TEXT,
+    last_contact_at TEXT,
+    contact_count   INTEGER NOT NULL DEFAULT 0,
+    created_at      TEXT NOT NULL DEFAULT datetime('now'),
+    updated_at      TEXT NOT NULL DEFAULT datetime('now')
+  );
+  CREATE INDEX IF NOT EXISTS idx_crm_leads_tenant_assignee ON crm_leads(tenant_id, assigned_to, status);
+  CREATE INDEX IF NOT EXISTS idx_crm_leads_tenant_phone ON crm_leads(tenant_id, phone);
+  CREATE INDEX IF NOT EXISTS idx_crm_leads_tenant_email ON crm_leads(tenant_id, email);
+  CREATE TABLE IF NOT EXISTS crm_lead_events (
+    id         TEXT PRIMARY KEY,
+    tenant_id  TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    lead_id    TEXT NOT NULL REFERENCES crm_leads(id) ON DELETE CASCADE,
+    user_id    TEXT REFERENCES users(id) ON DELETE SET NULL,
+    kind       TEXT NOT NULL,
+    detail     TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT datetime('now')
+  );
+  CREATE INDEX IF NOT EXISTS idx_crm_events_lead ON crm_lead_events(lead_id, created_at);
 `;
 
 /** Creates/updates the schema. A cluster-wide advisory lock keeps concurrent boots from racing. */

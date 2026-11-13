@@ -11,6 +11,7 @@ import { clippingRouter, startClippingScheduler } from './clipping';
 import { tenantProtocolsRouter, publicRouter } from './protocols';
 import { startEmailWorker } from './mailer';
 import { whatsappRouter, startWhatsApp, forgetWhatsAppTenant } from './whatsapp';
+import { crmRouter } from './crm';
 import { db, tx, migrate, audit, tenantStorageBytes, dbFileBytes } from './db';
 import {
   TENANT_ROLES,
@@ -524,6 +525,9 @@ tenant.use('/protocols', tenantProtocolsRouter);
 
 // WhatsApp (wacli): conexão do número, conversas e envio — always scoped to the session's tenant.
 tenant.use('/whatsapp', whatsappRouter);
+
+// Comunicação › CRM (leads) — always scoped to the session's tenant.
+tenant.use('/crm', crmRouter);
 
 api.use('/tenant', tenant);
 // Site do parlamentar (sem login): abertura de demanda e consulta de protocolo.

@@ -602,6 +602,25 @@ whatsappRouter.post('/read', async (req, res) => {
   res.json({ ok: true });
 });
 
+/** Envia texto pelo número do gabinete (usado pelo CRM). Lança HttpError com mensagem amigável. */
+export async function sendWhatsAppText(tenantId: string, rawTo: unknown, text: string) {
+  const to = recipient(rawTo);
+  await requireOnline(tenantId);
+  try {
+    const r = await sendText(tenantId, to, text);
+    return { id: r?.id ?? '', warning: r?.store_warning ?? null };
+  } catch (e) {
+    const err = e as WaError;
+    if (err instanceof HttpError) throw err;
+    throw new HttpError(
+      502,
+      err.timedOut
+        ? 'O envio não foi confirmado (conexão instável). Confira a conversa antes de reenviar para não duplicar.'
+        : `WhatsApp recusou o envio: ${err.message}`
+    );
+  }
+}
+
 whatsappRouter.post('/send', async (req, res) => {
   const t = tid(req);
   const text = String(req.body?.text ?? '').trim();
