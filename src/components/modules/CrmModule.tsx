@@ -28,8 +28,18 @@ import {
   Mail,
   MapPin,
   Settings2,
+  Ban,
+  NotebookPen,
+  ListChecks,
+  Megaphone,
+  ImagePlus,
+  Link2,
+  Pencil,
+  Eye,
+  Plus,
+  X,
 } from 'lucide-react';
-import { crm, type Lead, type LeadStatus, type CrmMeta, type LeadPage, type LeadEvent, type ImportPreview, type CrmUser } from '../../lib/crm';
+import { crm, type Lead, type LeadStatus, type CrmMeta, type LeadPage, type LeadEvent, type ImportPreview, type CrmUser, type Campaign, type CrmList } from '../../lib/crm';
 import { useDialog } from '../common/Dialogs';
 import { ModuleHeader, Modal, Field, Stat, inputCls, inputAutoCls, btnPrimary, btnGhost, btnDanger, fmtPhone } from './banco/ui';
 import { useWhatsAppStatus } from './whatsapp/WhatsAppConnection';
@@ -40,23 +50,24 @@ import { useWhatsAppStatus } from './whatsapp/WhatsAppConnection';
 const STATUS: Record<LeadStatus, { label: string; chip: string }> = {
   novo: { label: 'Novo', chip: 'bg-sky-50 text-sky-700 border-sky-200' },
   contatado: { label: 'Contatado', chip: 'bg-slate-100 text-slate-700 border-slate-200' },
-  interessado: { label: 'Interessado', chip: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+  interessado: { label: 'Gostou', chip: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
   retornar: { label: 'Retornar depois', chip: 'bg-amber-50 text-amber-800 border-amber-200' },
-  sem_resposta: { label: 'Sem resposta', chip: 'bg-slate-50 text-slate-500 border-slate-200' },
+  sem_resposta: { label: 'Não respondeu', chip: 'bg-slate-50 text-slate-500 border-slate-200' },
   sem_interesse: { label: 'Sem interesse', chip: 'bg-rose-50 text-rose-700 border-rose-200' },
-  numero_invalido: { label: 'Número inválido', chip: 'bg-zinc-100 text-zinc-600 border-zinc-200' },
+  numero_invalido: { label: 'Número errado', chip: 'bg-zinc-100 text-zinc-600 border-zinc-200' },
+  bloqueado: { label: 'Não enviar mais', chip: 'bg-red-900 text-white border-red-900' },
   convertido: { label: 'Convertido', chip: 'bg-[#E9F1F4] text-[#102C45] border-[#176B80]/30' },
 };
-const STATUS_ORDER: LeadStatus[] = ['novo', 'contatado', 'interessado', 'retornar', 'sem_resposta', 'sem_interesse', 'numero_invalido', 'convertido'];
+const STATUS_ORDER: LeadStatus[] = ['novo', 'contatado', 'interessado', 'retornar', 'sem_resposta', 'sem_interesse', 'numero_invalido', 'bloqueado'];
 
-/** Ícones de classificação do atendimento (um clique). */
+/** Botões de classificação do atendimento (um clique). */
 const ACTIONS: { status: LeadStatus; icon: React.ElementType; label: string; on: string; hover: string }[] = [
-  { status: 'interessado', icon: ThumbsUp, label: 'Interessado', on: 'bg-emerald-600 text-white border-emerald-600', hover: 'hover:text-emerald-700 hover:border-emerald-300 hover:bg-emerald-50' },
+  { status: 'interessado', icon: ThumbsUp, label: 'Gostou', on: 'bg-emerald-600 text-white border-emerald-600', hover: 'hover:text-emerald-700 hover:border-emerald-300 hover:bg-emerald-50' },
   { status: 'retornar', icon: CalendarClock, label: 'Retornar depois', on: 'bg-amber-500 text-white border-amber-500', hover: 'hover:text-amber-700 hover:border-amber-300 hover:bg-amber-50' },
-  { status: 'sem_resposta', icon: PhoneMissed, label: 'Sem resposta', on: 'bg-slate-500 text-white border-slate-500', hover: 'hover:text-slate-800 hover:border-slate-300 hover:bg-slate-50' },
+  { status: 'sem_resposta', icon: PhoneMissed, label: 'Não respondeu', on: 'bg-slate-500 text-white border-slate-500', hover: 'hover:text-slate-800 hover:border-slate-300 hover:bg-slate-50' },
   { status: 'sem_interesse', icon: ThumbsDown, label: 'Sem interesse', on: 'bg-rose-600 text-white border-rose-600', hover: 'hover:text-rose-700 hover:border-rose-300 hover:bg-rose-50' },
-  { status: 'numero_invalido', icon: PhoneOff, label: 'Número inválido', on: 'bg-zinc-600 text-white border-zinc-600', hover: 'hover:text-zinc-800 hover:border-zinc-300 hover:bg-zinc-50' },
-  { status: 'convertido', icon: Star, label: 'Convertido', on: 'bg-[#102C45] text-white border-[#102C45]', hover: 'hover:text-[#102C45] hover:border-[#176B80]/40 hover:bg-[#E9F1F4]' },
+  { status: 'numero_invalido', icon: PhoneOff, label: 'Número errado', on: 'bg-zinc-600 text-white border-zinc-600', hover: 'hover:text-zinc-800 hover:border-zinc-300 hover:bg-zinc-50' },
+  { status: 'bloqueado', icon: Ban, label: 'Não enviar mais mensagens', on: 'bg-red-900 text-white border-red-900', hover: 'hover:text-red-800 hover:border-red-300 hover:bg-red-50' },
 ];
 
 const ROLE_LABEL: Record<string, string> = {
@@ -75,6 +86,9 @@ const EVENT_LABEL: Record<string, string> = {
   whatsapp_gabinete: 'WhatsApp enviado pelo número do gabinete',
   whatsapp_link: 'WhatsApp aberto no aparelho do usuário',
 };
+
+/** Texto da campanha com os dados do lead + link no final. */
+const campaignText = (c: Campaign, l: Lead) => [fillTemplate(c.body, l), c.url].filter((x) => x && x.trim()).join('\n\n');
 
 /** Datas do servidor vêm em UTC no formato "YYYY-MM-DD HH:MM:SS". */
 const parseUtc = (s: string | null) => (s ? new Date(s.replace(' ', 'T') + 'Z') : null);
@@ -108,7 +122,7 @@ const saveTemplate = (t: string) => {
 const fillTemplate = (t: string, l: Lead) =>
   t.replace(/\{nome\}/gi, firstName(l.name)).replace(/\{nome_completo\}/gi, l.name).replace(/\{cidade\}/gi, l.city || 'sua cidade');
 
-type Tab = 'meus' | 'todos' | 'gestao';
+type Tab = 'meus' | 'todos' | 'listas' | 'campanhas' | 'distribuicao';
 
 // ---------------------------------------------------------------------------
 export const CrmModule: React.FC<{ onOpenIntegracoes?: () => void }> = ({ onOpenIntegracoes }) => {
@@ -118,6 +132,7 @@ export const CrmModule: React.FC<{ onOpenIntegracoes?: () => void }> = ({ onOpen
   const [importOpen, setImportOpen] = useState(false);
   const [distributeIds, setDistributeIds] = useState<string[] | 'unassigned' | null>(null);
   const [reload, setReload] = useState(0);
+  const [listFilter, setListFilter] = useState('');
 
   const loadMeta = useCallback(() => {
     crm
@@ -142,7 +157,9 @@ export const CrmModule: React.FC<{ onOpenIntegracoes?: () => void }> = ({ onOpen
     ...(meta.canManage
       ? ([
           ['todos', 'Todos os leads', Users],
-          ['gestao', 'Importações & distribuição', Shuffle],
+          ['listas', 'Listas', ListChecks],
+          ['campanhas', 'Campanhas', Megaphone],
+          ['distribuicao', 'Distribuição', Shuffle],
         ] as [Tab, string, React.ElementType][])
       : []),
   ];
@@ -183,11 +200,25 @@ export const CrmModule: React.FC<{ onOpenIntegracoes?: () => void }> = ({ onOpen
         </div>
       )}
 
-      {tab === 'gestao' && meta.canManage ? (
-        <GestaoPanel meta={meta} onChanged={refreshAll} onDistributeUnassigned={() => setDistributeIds('unassigned')} />
+      {tab === 'distribuicao' && meta.canManage ? (
+        <GestaoPanel meta={meta} onDistributeUnassigned={() => setDistributeIds('unassigned')} />
+      ) : tab === 'listas' && meta.canManage ? (
+        <ListsPanel
+          meta={meta}
+          reload={reload}
+          onChanged={refreshAll}
+          onOpenList={(id) => {
+            setListFilter(id);
+            setTab('todos');
+          }}
+          onOpenCampaigns={() => setTab('campanhas')}
+        />
+      ) : tab === 'campanhas' && meta.canManage ? (
+        <CampaignsPanel meta={meta} onChanged={refreshAll} />
       ) : (
         <LeadsPanel
-          key={tab}
+          key={`${tab}:${listFilter}`}
+          initialList={tab === 'todos' ? listFilter : ''}
           scope={tab === 'todos' ? 'all' : 'mine'}
           meta={meta}
           reload={reload}
@@ -228,6 +259,7 @@ export const CrmModule: React.FC<{ onOpenIntegracoes?: () => void }> = ({ onOpen
 // ---------------------------------------------------------------------------
 function LeadsPanel({
   scope,
+  initialList,
   meta,
   reload,
   onChanged,
@@ -235,6 +267,7 @@ function LeadsPanel({
   onOpenIntegracoes,
 }: {
   scope: 'mine' | 'all';
+  initialList: string;
   meta: CrmMeta;
   reload: number;
   onChanged: () => void;
@@ -248,6 +281,7 @@ function LeadsPanel({
   const [q, setQ] = useState('');
   const [qDebounced, setQDebounced] = useState('');
   const [assignee, setAssignee] = useState('');
+  const [importId, setImportId] = useState(initialList);
   const [data, setData] = useState<LeadPage | null>(null);
   const [items, setItems] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(false);
@@ -265,7 +299,7 @@ function LeadsPanel({
     async (page = 0) => {
       setLoading(true);
       try {
-        const r = await crm.leads({ scope, status, q: qDebounced, assignee: scope === 'all' ? assignee : undefined, page });
+        const r = await crm.leads({ scope, status, q: qDebounced, assignee: scope === 'all' ? assignee : undefined, importId, page });
         setData(r);
         setItems((prev) => (page === 0 ? r.items : [...prev, ...r.items]));
         if (page === 0) setSelected(new Set());
@@ -275,7 +309,7 @@ function LeadsPanel({
         setLoading(false);
       }
     },
-    [scope, status, qDebounced, assignee, dialog]
+    [scope, status, qDebounced, assignee, importId, dialog]
   );
   useEffect(() => {
     load(0);
@@ -287,12 +321,30 @@ function LeadsPanel({
   };
 
   const classify = async (lead: Lead, s: LeadStatus) => {
+    if (lead.status === 'bloqueado') return;
+    if (s === 'bloqueado') {
+      const ok = await dialog.confirm({
+        title: 'Não enviar mais mensagens?',
+        message: (
+          <>
+            <strong>{lead.name}</strong>
+            {lead.phone && <> · {showPhone(lead.phone)}</>}
+            <br />O número vai para <strong>Administração & LGPD › Números Bloqueados</strong>. O sistema não enviará mais nenhuma mensagem para ele e
+            não aceitará o número em novas importações. Só a administração pode desbloquear.
+          </>
+        ),
+        confirmLabel: 'Bloquear número',
+        tone: 'danger',
+      });
+      if (!ok) return;
+    }
     const next = lead.status === s ? (lead.contactCount > 0 ? 'contatado' : 'novo') : s;
     setBusyId(lead.id);
     try {
       replace(await crm.update(lead.id, { status: next }));
       onChanged();
-      dialog.toast(`${firstName(lead.name)}: ${STATUS[next].label}.`);
+      dialog.toast(next === 'bloqueado' ? `${showPhone(lead.phone) || lead.name} bloqueado: não receberá mais mensagens.` : `${firstName(lead.name)}: ${STATUS[next].label}.`);
+      if (next === 'bloqueado') load(0);
     } catch (e) {
       dialog.alert({ title: 'Não foi possível classificar', message: (e as Error).message, tone: 'danger' });
     } finally {
@@ -301,12 +353,12 @@ function LeadsPanel({
   };
 
   const counts = data?.counts ?? {};
-  const allCount = STATUS_ORDER.reduce((n, s) => n + (counts[s] ?? 0), 0);
-  const openCount = allCount - (counts.sem_interesse ?? 0) - (counts.numero_invalido ?? 0) - (counts.convertido ?? 0);
+  const allCount = [...STATUS_ORDER, 'convertido' as LeadStatus].reduce((n, s) => n + (counts[s] ?? 0), 0);
+  const openCount = allCount - (counts.sem_interesse ?? 0) - (counts.numero_invalido ?? 0) - (counts.bloqueado ?? 0) - (counts.convertido ?? 0);
   const chips: [string, string, number][] = [
     ['abertos', 'Em aberto', openCount],
     ['', 'Todos', allCount],
-    ...STATUS_ORDER.map((s) => [s, STATUS[s].label, counts[s] ?? 0] as [string, string, number]),
+    ...[...STATUS_ORDER, ...(counts.convertido ? (['convertido'] as LeadStatus[]) : [])].map((s) => [s, STATUS[s].label, counts[s] ?? 0] as [string, string, number]),
   ];
   const allSelected = items.length > 0 && items.every((l) => selected.has(l.id));
   const selIds = [...selected];
@@ -347,7 +399,7 @@ function LeadsPanel({
           <Stat icon={Inbox} label="Em aberto" value={openCount} sub="aguardando atendimento" />
           <Stat icon={Target} label="Novos" value={counts.novo ?? 0} sub="ainda sem contato" />
           <Stat icon={CalendarClock} label="Retornar" value={counts.retornar ?? 0} sub="combinar novo contato" />
-          <Stat icon={Star} label="Convertidos" value={counts.convertido ?? 0} sub={`${counts.interessado ?? 0} interessados`} />
+          <Stat icon={ThumbsUp} label="Gostaram" value={counts.interessado ?? 0} sub={`${counts.bloqueado ?? 0} pediram para não receber`} />
         </div>
       )}
 
@@ -375,6 +427,16 @@ function LeadsPanel({
               <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
               <input className={`${inputCls} pl-8`} placeholder="Buscar por nome, telefone, e-mail ou cidade…" value={q} onChange={(e) => setQ(e.target.value)} />
             </div>
+            {meta.imports.length > 0 && (
+              <select className={inputAutoCls} value={importId} onChange={(e) => setImportId(e.target.value)} aria-label="Lista">
+                <option value="">Todas as listas</option>
+                {meta.imports.map((i) => (
+                  <option key={i.id} value={i.id}>
+                    {i.name}
+                  </option>
+                ))}
+              </select>
+            )}
             {scope === 'all' && (
               <select className={inputAutoCls} value={assignee} onChange={(e) => setAssignee(e.target.value)}>
                 <option value="">Todos os responsáveis</option>
@@ -527,9 +589,15 @@ function LeadsPanel({
                 <div className="flex flex-wrap items-center gap-1.5 lg:justify-end shrink-0">
                   <button
                     onClick={() => setCompose(l)}
-                    disabled={!l.waPhone}
+                    disabled={!l.waPhone || l.status === 'bloqueado'}
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed"
-                    title={l.waPhone ? `Enviar WhatsApp para ${showPhone(l.phone)}` : 'Sem celular válido para WhatsApp'}
+                    title={
+                      l.status === 'bloqueado'
+                        ? 'Número bloqueado: pediu para não receber mensagens'
+                        : l.waPhone
+                          ? `Enviar WhatsApp para ${showPhone(l.phone)}`
+                          : 'Sem celular válido para WhatsApp'
+                    }
                   >
                     <MessageCircle className="w-3.5 h-3.5" /> WhatsApp
                   </button>
@@ -540,9 +608,19 @@ function LeadsPanel({
                       <button
                         key={a.status}
                         onClick={() => classify(l, a.status)}
-                        disabled={busyId === l.id}
-                        className={`p-1.5 rounded-lg border transition-colors disabled:opacity-50 ${active ? a.on : `bg-white text-slate-400 border-slate-200 ${a.hover}`}`}
-                        title={active ? `${a.label} (clique para desfazer)` : a.label}
+                        disabled={busyId === l.id || (l.status === 'bloqueado' && !active)}
+                        className={`p-1.5 rounded-lg border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                          active ? `${a.on} ${a.status === 'bloqueado' ? 'cursor-default' : ''}` : `bg-white text-slate-400 border-slate-200 ${a.hover}`
+                        }`}
+                        title={
+                          active
+                            ? a.status === 'bloqueado'
+                              ? 'Número bloqueado (desbloqueio em Administração & LGPD › Números Bloqueados)'
+                              : `${a.label} (clique para desfazer)`
+                            : l.status === 'bloqueado'
+                              ? 'Número bloqueado'
+                              : a.label
+                        }
                         aria-label={a.label}
                         aria-pressed={active}
                       >
@@ -556,7 +634,7 @@ function LeadsPanel({
                     title="Anotações e histórico"
                     aria-label="Anotações e histórico"
                   >
-                    {l.agentNotes ? <StickyNote className="w-4 h-4 text-[#176B80]" /> : <History className="w-4 h-4" />}
+                    {l.agentNotes ? <StickyNote className="w-4 h-4 text-[#176B80]" /> : <NotebookPen className="w-4 h-4" />}
                   </button>
                 </div>
               </div>
@@ -579,12 +657,16 @@ function LeadsPanel({
             <a.icon className="w-3 h-3" /> {a.label}
           </span>
         ))}
-        <span>· Clique de novo no ícone ativo para desfazer.</span>
+        <span className="flex items-center gap-1">
+          <NotebookPen className="w-3 h-3" /> Anotações e histórico
+        </span>
+        <span>· Clique de novo no ícone ativo para desfazer (exceto “Não enviar mais mensagens”, que só a administração desbloqueia).</span>
       </div>
 
       {compose && (
         <ComposeModal
           lead={compose}
+          campaign={meta.campaigns.find((c) => c.importId && c.importId === compose.importId) ?? null}
           waOnline={Boolean(waOnline)}
           onClose={() => setCompose(null)}
           onSent={(lead) => {
@@ -602,17 +684,30 @@ function LeadsPanel({
 // ---------------------------------------------------------------------------
 // Envio de WhatsApp
 // ---------------------------------------------------------------------------
-function ComposeModal({ lead, waOnline, onClose, onSent }: { lead: Lead; waOnline: boolean; onClose: () => void; onSent: (l: Lead) => void }) {
+function ComposeModal({
+  lead,
+  campaign,
+  waOnline,
+  onClose,
+  onSent,
+}: {
+  lead: Lead;
+  campaign: Campaign | null;
+  waOnline: boolean;
+  onClose: () => void;
+  onSent: (l: Lead) => void;
+}) {
   const dialog = useDialog();
   const [template, setTemplate] = useState(loadTemplate);
-  const [text, setText] = useState(() => fillTemplate(loadTemplate(), lead));
+  const [text, setText] = useState(() => (campaign ? campaignText(campaign, lead) : fillTemplate(loadTemplate(), lead)));
+  const [withImage, setWithImage] = useState(Boolean(campaign?.image));
   const [editingTemplate, setEditingTemplate] = useState(false);
   const [sending, setSending] = useState(false);
 
   const viaGabinete = async () => {
     setSending(true);
     try {
-      const r = await crm.sendWhatsApp(lead.id, text.trim());
+      const r = await crm.sendWhatsApp(lead.id, text.trim(), campaign ? { campaignId: campaign.id, withImage: withImage && Boolean(campaign.image) } : undefined);
       dialog.toast(`Mensagem enviada para ${firstName(lead.name)}.`);
       if (r.warning) dialog.toast(r.warning, 'warning');
       onSent(r.lead);
@@ -624,12 +719,13 @@ function ComposeModal({ lead, waOnline, onClose, onSent }: { lead: Lead; waOnlin
   };
   const viaLink = async () => {
     const phone = (lead.waPhone ?? '').replace(/\D/g, '');
-    window.open(`https://wa.me/${phone}?text=${encodeURIComponent(text.trim())}`, '_blank', 'noopener');
     try {
-      const r = await crm.markContacted(lead.id, text.trim());
+      // Registra antes de abrir: se o número foi bloqueado, o servidor recusa.
+      const r = await crm.markContacted(lead.id, campaign ? `[${campaign.name}] ${text.trim()}` : text.trim());
+      window.open(`https://wa.me/${phone}?text=${encodeURIComponent(text.trim())}`, '_blank', 'noopener');
       onSent(r.lead);
     } catch (e) {
-      dialog.alert({ title: 'Contato não registrado', message: (e as Error).message, tone: 'warning' });
+      dialog.alert({ title: 'WhatsApp', message: (e as Error).message, tone: 'danger' });
     }
   };
 
@@ -652,7 +748,7 @@ function ComposeModal({ lead, waOnline, onClose, onSent }: { lead: Lead; waOnlin
           {waOnline && (
             <button
               className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50"
-              disabled={sending || !text.trim()}
+              disabled={sending || (!text.trim() && !(withImage && campaign?.image))}
               onClick={viaGabinete}
             >
               {sending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />} Enviar pelo WhatsApp do gabinete
@@ -668,35 +764,60 @@ function ComposeModal({ lead, waOnline, onClose, onSent }: { lead: Lead; waOnlin
           {lead.contactCount > 0 && <span>· {lead.contactCount} contato(s) anteriores, último {fmtWhen(lead.lastContactAt)}</span>}
         </div>
         {lead.notes && <p className="bg-slate-50 border border-slate-100 rounded-lg p-2 text-slate-600">Obs.: {lead.notes}</p>}
+        {campaign && (
+          <p className="flex items-center gap-1.5 text-[#102C45] bg-[#E9F1F4] rounded-lg px-2.5 py-1.5">
+            <Megaphone className="w-3.5 h-3.5" /> Campanha <strong>{campaign.name}</strong>
+          </p>
+        )}
+        {campaign?.image && (
+          <div className="flex items-start gap-3">
+            <img src={campaign.image.url} alt="" className="w-24 h-24 object-cover rounded-lg border border-slate-200" />
+            <div className="space-y-1">
+              <label className={`flex items-center gap-2 ${waOnline ? '' : 'opacity-60'}`}>
+                <input type="checkbox" checked={withImage && waOnline} disabled={!waOnline} onChange={(e) => setWithImage(e.target.checked)} />
+                Enviar a imagem junto (texto vai como legenda)
+              </label>
+              <p className="text-[10px] text-slate-500">
+                {waOnline
+                  ? 'A imagem só pode ser enviada pelo WhatsApp do gabinete.'
+                  : '“Abrir no meu WhatsApp” leva apenas o texto e o link — anexe a imagem manualmente se quiser.'}
+              </p>
+              <a href={campaign.image.url} download={campaign.image.name} className="text-[10px] text-[#176B80] font-semibold hover:underline">
+                Baixar imagem
+              </a>
+            </div>
+          </div>
+        )}
         <Field label="Mensagem">
           <textarea className={`${inputCls} leading-relaxed`} rows={6} value={text} onChange={(e) => setText(e.target.value)} maxLength={4000} />
         </Field>
-        {editingTemplate ? (
-          <div className="space-y-2 bg-slate-50 border border-slate-200 rounded-lg p-3">
-            <Field label="Mensagem padrão" hint="Use {nome}, {nome_completo} e {cidade}. Fica salva neste navegador.">
-              <textarea className={inputCls} rows={3} value={template} onChange={(e) => setTemplate(e.target.value)} />
-            </Field>
-            <div className="flex justify-end gap-2">
-              <button className={btnGhost} onClick={() => setEditingTemplate(false)}>
-                Cancelar
-              </button>
-              <button
-                className={btnPrimary}
-                onClick={() => {
-                  saveTemplate(template);
-                  setText(fillTemplate(template, lead));
-                  setEditingTemplate(false);
-                }}
-              >
-                Salvar e aplicar
-              </button>
+        {!campaign &&
+          (editingTemplate ? (
+            <div className="space-y-2 bg-slate-50 border border-slate-200 rounded-lg p-3">
+              <Field label="Mensagem padrão" hint="Use {nome}, {nome_completo} e {cidade}. Fica salva neste navegador.">
+                <textarea className={inputCls} rows={3} value={template} onChange={(e) => setTemplate(e.target.value)} />
+              </Field>
+              <div className="flex justify-end gap-2">
+                <button className={btnGhost} onClick={() => setEditingTemplate(false)}>
+                  Cancelar
+                </button>
+                <button
+                  className={btnPrimary}
+                  onClick={() => {
+                    saveTemplate(template);
+                    setText(fillTemplate(template, lead));
+                    setEditingTemplate(false);
+                  }}
+                >
+                  Salvar e aplicar
+                </button>
+              </div>
             </div>
-          </div>
-        ) : (
-          <button className="text-[#176B80] font-semibold hover:underline" onClick={() => setEditingTemplate(true)}>
-            Editar mensagem padrão
-          </button>
-        )}
+          ) : (
+            <button className="text-[#176B80] font-semibold hover:underline" onClick={() => setEditingTemplate(true)}>
+              Editar mensagem padrão
+            </button>
+          ))}
         <p className="text-[10px] text-slate-500">
           {waOnline
             ? '“Enviar pelo WhatsApp do gabinete” manda pelo número oficial conectado; “Abrir no meu WhatsApp” abre o seu aplicativo com a mensagem pronta.'
@@ -957,7 +1078,12 @@ function ImportModal({ users, onClose, onDone }: { users: CrmUser[]; onClose: ()
               <Stat icon={CheckCircle2} label="Leads válidos" value={preview.valid} />
               <Stat icon={Users} label="Já no CRM" value={preview.duplicates} sub="mesmo telefone ou e-mail" />
               <Stat icon={PhoneOff} label="Sem WhatsApp" value={preview.withoutWhatsApp} sub="sem celular com DDD" />
-              <Stat icon={AlertTriangle} label="Com erro" value={preview.errorCount} sub="serão ignorados" />
+              <Stat
+                icon={AlertTriangle}
+                label="Com erro"
+                value={preview.errorCount}
+                sub={preview.blocked ? `${preview.blocked} bloqueado(s) (LGPD) · serão ignorados` : 'serão ignorados'}
+              />
             </div>
             {preview.ignoredColumns.length > 0 && (
               <p className="text-[11px] text-slate-500">Colunas ignoradas: {preview.ignoredColumns.join(', ')}.</p>
@@ -1103,16 +1229,97 @@ function DistributeModal({
 // ---------------------------------------------------------------------------
 // Gestão: equipe e importações
 // ---------------------------------------------------------------------------
-function GestaoPanel({ meta, onChanged, onDistributeUnassigned }: { meta: CrmMeta; onChanged: () => void; onDistributeUnassigned: () => void }) {
-  const dialog = useDialog();
+function GestaoPanel({ meta, onDistributeUnassigned }: { meta: CrmMeta; onDistributeUnassigned: () => void }) {
   const maxOpen = useMemo(() => Math.max(1, ...meta.users.map((u) => u.open)), [meta.users]);
+  return (
+    <div className="bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden max-w-3xl">
+      <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between gap-2">
+        <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+          <Users className="w-4 h-4 text-[#176B80]" /> Carga por usuário
+        </h3>
+        {meta.unassigned > 0 && (
+          <button className={btnPrimary} onClick={onDistributeUnassigned}>
+            <UserPlus className="w-3.5 h-3.5" /> Distribuir {meta.unassigned} sem responsável
+          </button>
+        )}
+      </div>
+      <ul className="divide-y divide-slate-100">
+        {meta.users.map((u) => (
+          <li key={u.id} className="px-4 py-2.5 text-xs">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-semibold text-slate-800 truncate">{u.name}</span>
+              <span className="text-slate-500 shrink-0">
+                <strong className="text-slate-800 font-mono">{u.open}</strong> em aberto · {u.total} no total
+              </span>
+            </div>
+            <div className="h-1.5 bg-slate-100 rounded-full mt-1.5 overflow-hidden">
+              <div className="h-full bg-[#176B80] rounded-full" style={{ width: `${(u.open / maxOpen) * 100}%` }} />
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
 
-  const removeImport = async (id: string, name: string, remaining: number) => {
+// ---------------------------------------------------------------------------
+// Listas importadas (cada lista é uma campanha)
+// ---------------------------------------------------------------------------
+const BAR: [LeadStatus, string][] = [
+  ['novo', 'bg-sky-400'],
+  ['contatado', 'bg-slate-400'],
+  ['interessado', 'bg-emerald-500'],
+  ['retornar', 'bg-amber-400'],
+  ['sem_resposta', 'bg-slate-300'],
+  ['sem_interesse', 'bg-rose-500'],
+  ['numero_invalido', 'bg-zinc-500'],
+  ['bloqueado', 'bg-red-900'],
+  ['convertido', 'bg-[#102C45]'],
+];
+
+function ListsPanel({
+  meta,
+  reload,
+  onChanged,
+  onOpenList,
+  onOpenCampaigns,
+}: {
+  meta: CrmMeta;
+  reload: number;
+  onChanged: () => void;
+  onOpenList: (id: string) => void;
+  onOpenCampaigns: () => void;
+}) {
+  const dialog = useDialog();
+  const [lists, setLists] = useState<CrmList[] | null>(null);
+  const [distributeList, setDistributeList] = useState<CrmList | null>(null);
+  const [campaignFor, setCampaignFor] = useState<{ campaign: Campaign | null; importId: string } | null>(null);
+
+  const load = useCallback(() => {
+    crm
+      .lists()
+      .then(setLists)
+      .catch((e) => dialog.alert({ title: 'Erro ao carregar listas', message: (e as Error).message, tone: 'danger' }));
+  }, [dialog]);
+  useEffect(load, [load, reload]);
+
+  const rename = async (l: CrmList) => {
+    const name = window.prompt('Novo nome da lista', l.name)?.trim();
+    if (!name || name === l.name) return;
+    try {
+      await crm.renameList(l.id, name);
+      onChanged();
+    } catch (e) {
+      dialog.alert({ title: 'Erro ao renomear', message: (e as Error).message, tone: 'danger' });
+    }
+  };
+  const remove = async (l: CrmList) => {
     const ok = await dialog.confirm({
-      title: 'Excluir importação?',
+      title: 'Excluir lista?',
       message: (
         <>
-          A lista <strong>{name}</strong> e os seus <strong>{remaining}</strong> lead(s), com todo o histórico de atendimento, serão apagados.
+          A lista <strong>{l.name}</strong> e os seus <strong>{l.leads}</strong> lead(s), com todo o histórico de atendimento, serão apagados.
+          {l.campaign && ' A campanha vinculada fica sem lista.'} Os números bloqueados continuam bloqueados.
         </>
       ),
       confirmLabel: 'Excluir',
@@ -1120,7 +1327,7 @@ function GestaoPanel({ meta, onChanged, onDistributeUnassigned }: { meta: CrmMet
     });
     if (!ok) return;
     try {
-      const r = await crm.removeImport(id);
+      const r = await crm.removeImport(l.id);
       dialog.toast(`${r.deleted} lead(s) excluídos.`);
       onChanged();
     } catch (e) {
@@ -1128,66 +1335,436 @@ function GestaoPanel({ meta, onChanged, onDistributeUnassigned }: { meta: CrmMet
     }
   };
 
-  return (
-    <div className="grid lg:grid-cols-2 gap-4">
-      <div className="bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden">
-        <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between gap-2">
-          <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-            <Users className="w-4 h-4 text-[#176B80]" /> Carga por usuário
-          </h3>
-          {meta.unassigned > 0 && (
-            <button className={btnPrimary} onClick={onDistributeUnassigned}>
-              <UserPlus className="w-3.5 h-3.5" /> Distribuir {meta.unassigned} sem responsável
-            </button>
-          )}
-        </div>
-        <ul className="divide-y divide-slate-100">
-          {meta.users.map((u) => (
-            <li key={u.id} className="px-4 py-2.5 text-xs">
-              <div className="flex items-center justify-between gap-2">
-                <span className="font-semibold text-slate-800 truncate">{u.name}</span>
-                <span className="text-slate-500 shrink-0">
-                  <strong className="text-slate-800 font-mono">{u.open}</strong> em aberto · {u.total} no total
-                </span>
-              </div>
-              <div className="h-1.5 bg-slate-100 rounded-full mt-1.5 overflow-hidden">
-                <div className="h-full bg-[#176B80] rounded-full" style={{ width: `${(u.open / maxOpen) * 100}%` }} />
-              </div>
-            </li>
-          ))}
-        </ul>
+  if (!lists) {
+    return (
+      <div className="p-10 text-center text-xs text-slate-500">
+        <Loader2 className="w-5 h-5 animate-spin inline" />
       </div>
+    );
+  }
+  if (!lists.length) {
+    return (
+      <div className="bg-white border border-slate-200 rounded-xl p-10 text-center text-xs text-slate-500 space-y-1">
+        <ListChecks className="w-8 h-8 text-slate-300 mx-auto" />
+        <p className="font-semibold text-slate-700">Nenhuma lista importada ainda.</p>
+        <p>Use “Importar leads” para trazer a primeira planilha. Cada planilha vira uma lista, com a sua própria campanha.</p>
+      </div>
+    );
+  }
 
-      <div className="bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden">
-        <div className="px-4 py-3 border-b border-slate-100">
-          <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-            <FileSpreadsheet className="w-4 h-4 text-[#176B80]" /> Importações
-          </h3>
-        </div>
-        {meta.imports.length === 0 ? (
-          <p className="p-6 text-center text-xs text-slate-500">Nenhuma planilha importada ainda.</p>
-        ) : (
-          <ul className="divide-y divide-slate-100">
-            {meta.imports.map((i) => (
-              <li key={i.id} className="px-4 py-2.5 text-xs flex items-center gap-3">
-                <div className="min-w-0 flex-1">
-                  <p className="font-semibold text-slate-800 truncate">{i.name}</p>
+  return (
+    <div className="space-y-3">
+      <div className="grid lg:grid-cols-2 gap-3">
+        {lists.map((l) => {
+          const camp = l.campaign ? meta.campaigns.find((c) => c.id === l.campaign!.id) ?? null : null;
+          const pct = l.leads ? Math.round((l.contacted / l.leads) * 100) : 0;
+          return (
+            <div key={l.id} className="bg-white border border-slate-200 rounded-xl shadow-xs p-4 space-y-3">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <h3 className="text-sm font-bold text-slate-900 truncate">{l.name}</h3>
                   <p className="text-[11px] text-slate-500 truncate">
-                    {fmtWhen(i.createdAt)} · {i.createdBy || '—'} · {i.remaining} de {i.total} lead(s)
+                    {fmtWhen(l.createdAt)} · {l.createdBy || '—'} · {l.fileName}
                   </p>
                 </div>
-                <button
-                  className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50"
-                  title="Excluir importação e seus leads"
-                  onClick={() => removeImport(i.id, i.name, i.remaining)}
-                >
-                  <Trash2 className="w-4 h-4" />
+                <div className="flex gap-1 shrink-0">
+                  <button className="p-1.5 rounded-lg text-slate-400 hover:text-[#176B80] hover:bg-slate-50" title="Renomear" onClick={() => rename(l)}>
+                    <Pencil className="w-3.5 h-3.5" />
+                  </button>
+                  <button className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50" title="Excluir lista e leads" onClick={() => remove(l)}>
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-4 gap-2 text-center">
+                {[
+                  ['Leads', l.leads],
+                  ['Contatados', `${l.contacted} (${pct}%)`],
+                  ['Gostaram', l.counts.interessado ?? 0],
+                  ['Sem responsável', l.unassigned],
+                ].map(([k, v]) => (
+                  <div key={k as string} className="bg-slate-50 rounded-lg py-1.5">
+                    <p className="text-sm font-bold text-slate-900 font-mono">{v}</p>
+                    <p className="text-[10px] text-slate-500">{k}</p>
+                  </div>
+                ))}
+              </div>
+
+              {l.leads > 0 && (
+                <div>
+                  <div className="h-2 rounded-full overflow-hidden flex bg-slate-100">
+                    {BAR.map(([st, cls]) =>
+                      l.counts[st] ? <div key={st} className={cls} style={{ width: `${((l.counts[st] ?? 0) / l.leads) * 100}%` }} title={`${STATUS[st].label}: ${l.counts[st]}`} /> : null
+                    )}
+                  </div>
+                  <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1.5 text-[10px] text-slate-500">
+                    {BAR.filter(([st]) => l.counts[st]).map(([st, cls]) => (
+                      <span key={st} className="flex items-center gap-1">
+                        <span className={`w-2 h-2 rounded-full ${cls}`} />
+                        {STATUS[st].label} {l.counts[st]}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center gap-2 p-2.5 rounded-lg border border-dashed border-slate-200 text-xs">
+                <Megaphone className={`w-4 h-4 shrink-0 ${camp ? 'text-[#176B80]' : 'text-slate-300'}`} />
+                {camp ? (
+                  <span className="flex-1 min-w-0 truncate">
+                    Campanha <strong>{camp.name}</strong>
+                    {camp.image && ' · imagem'}
+                    {camp.url && ' · link'}
+                  </span>
+                ) : (
+                  <span className="flex-1 text-slate-500">Sem campanha — os atendentes usam a mensagem padrão.</span>
+                )}
+                <button className="text-[#176B80] font-semibold hover:underline shrink-0" onClick={() => setCampaignFor({ campaign: camp, importId: l.id })}>
+                  {camp ? 'Editar' : 'Criar campanha'}
                 </button>
-              </li>
-            ))}
-          </ul>
-        )}
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <button className={btnGhost} onClick={() => onOpenList(l.id)}>
+                  <Eye className="w-3.5 h-3.5" /> Ver leads
+                </button>
+                {l.unassigned > 0 && (
+                  <button className={btnPrimary} onClick={() => setDistributeList(l)}>
+                    <Shuffle className="w-3.5 h-3.5" /> Distribuir {l.unassigned} sem responsável
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })}
       </div>
+      <p className="text-[11px] text-slate-500 px-1">
+        Cada lista importada é uma campanha. Crie a mensagem (texto, imagem e link) em{' '}
+        <button className="text-[#176B80] font-semibold hover:underline" onClick={onOpenCampaigns}>
+          Campanhas
+        </button>{' '}
+        ou direto no cartão da lista.
+      </p>
+
+      {distributeList && (
+        <DistributeListModal
+          list={distributeList}
+          users={meta.users}
+          onClose={() => setDistributeList(null)}
+          onDone={() => {
+            setDistributeList(null);
+            onChanged();
+          }}
+        />
+      )}
+      {campaignFor && (
+        <CampaignModal
+          campaign={campaignFor.campaign}
+          defaultImportId={campaignFor.importId}
+          meta={meta}
+          onClose={() => setCampaignFor(null)}
+          onSaved={() => {
+            setCampaignFor(null);
+            onChanged();
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+function DistributeListModal({ list, users, onClose, onDone }: { list: CrmList; users: CrmUser[]; onClose: () => void; onDone: () => void }) {
+  const dialog = useDialog();
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [saving, setSaving] = useState(false);
+  const run = async () => {
+    setSaving(true);
+    try {
+      const r = await crm.distributeList(list.id, [...picked]);
+      const dist = Object.entries(r.perUser)
+        .map(([id, n]) => `${users.find((u) => u.id === id)?.name ?? 'usuário'}: ${n}`)
+        .join(' · ');
+      dialog.toast(`${r.distributed} lead(s) distribuídos — ${dist}.`);
+      onDone();
+    } catch (e) {
+      dialog.alert({ title: 'Erro na distribuição', message: (e as Error).message, tone: 'danger' });
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <Modal
+      title={`Distribuir ${list.unassigned} lead(s) de “${list.name}”`}
+      onClose={onClose}
+      footer={
+        <>
+          <button className={btnGhost} onClick={onClose}>
+            Cancelar
+          </button>
+          <button className={btnPrimary} onClick={run} disabled={saving || !picked.size}>
+            {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />} Distribuir
+          </button>
+        </>
+      }
+    >
+      <div className="space-y-2 text-xs">
+        <UserPicker users={users} value={picked} onChange={setPicked} />
+        <p className="text-[10px] text-slate-500">
+          {picked.size ? `Cerca de ${Math.ceil(list.unassigned / picked.size)} lead(s) por usuário. ` : ''}Quem tem menos leads em aberto recebe primeiro.
+        </p>
+      </div>
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Campanhas: texto, imagem e link
+// ---------------------------------------------------------------------------
+function CampaignsPanel({ meta, onChanged }: { meta: CrmMeta; onChanged: () => void }) {
+  const dialog = useDialog();
+  const [editing, setEditing] = useState<Campaign | 'new' | null>(null);
+  const listName = (id: string | null) => (id ? meta.imports.find((i) => i.id === id)?.name ?? '—' : null);
+
+  const remove = async (c: Campaign) => {
+    const ok = await dialog.confirm({
+      title: 'Excluir campanha?',
+      message: (
+        <>
+          A campanha <strong>{c.name}</strong> será apagada. Os leads da lista continuam, e os atendentes passam a usar a mensagem padrão.
+        </>
+      ),
+      confirmLabel: 'Excluir',
+      tone: 'danger',
+    });
+    if (!ok) return;
+    try {
+      await crm.deleteCampaign(c.id);
+      dialog.toast('Campanha excluída.');
+      onChanged();
+    } catch (e) {
+      dialog.alert({ title: 'Erro ao excluir', message: (e as Error).message, tone: 'danger' });
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs text-slate-600">
+          A campanha define a mensagem que o atendente envia aos leads da lista vinculada. Use <code className="text-[11px]">{'{nome}'}</code>,{' '}
+          <code className="text-[11px]">{'{nome_completo}'}</code> e <code className="text-[11px]">{'{cidade}'}</code> para personalizar.
+        </p>
+        <button className={btnPrimary} onClick={() => setEditing('new')}>
+          <Plus className="w-3.5 h-3.5" /> Nova campanha
+        </button>
+      </div>
+
+      {meta.campaigns.length === 0 ? (
+        <div className="bg-white border border-slate-200 rounded-xl p-10 text-center text-xs text-slate-500 space-y-1">
+          <Megaphone className="w-8 h-8 text-slate-300 mx-auto" />
+          <p className="font-semibold text-slate-700">Nenhuma campanha criada.</p>
+          <p>Crie uma campanha com texto, imagem e link e vincule a uma lista importada.</p>
+        </div>
+      ) : (
+        <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-3">
+          {meta.campaigns.map((c) => (
+            <div key={c.id} className="bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden flex flex-col">
+              {c.image ? (
+                <img src={c.image.url} alt="" className="w-full h-40 object-cover bg-slate-100" />
+              ) : (
+                <div className="h-16 bg-slate-50 flex items-center justify-center text-[11px] text-slate-400 gap-1.5">
+                  <ImagePlus className="w-4 h-4" /> Sem imagem
+                </div>
+              )}
+              <div className="p-3.5 space-y-2 flex-1 flex flex-col">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">{c.name}</h3>
+                  <p className="text-[11px] text-slate-500">
+                    {listName(c.importId) ? (
+                      <>
+                        Lista: <strong className="text-slate-700">{listName(c.importId)}</strong>
+                      </>
+                    ) : (
+                      <em className="text-amber-700">não vinculada a nenhuma lista</em>
+                    )}
+                  </p>
+                </div>
+                <p className="text-xs text-slate-700 whitespace-pre-line line-clamp-4 flex-1">{c.body || <em className="text-slate-400">sem texto</em>}</p>
+                {c.url && (
+                  <a href={c.url} target="_blank" rel="noopener noreferrer" className="text-[11px] text-[#176B80] hover:underline flex items-center gap-1 truncate">
+                    <Link2 className="w-3 h-3 shrink-0" /> {c.url}
+                  </a>
+                )}
+                <div className="flex gap-2 pt-1">
+                  <button className={btnGhost} onClick={() => setEditing(c)}>
+                    <Pencil className="w-3.5 h-3.5" /> Editar
+                  </button>
+                  <button className={btnDanger} onClick={() => remove(c)}>
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {editing && (
+        <CampaignModal
+          campaign={editing === 'new' ? null : editing}
+          defaultImportId=""
+          meta={meta}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            onChanged();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function CampaignModal({
+  campaign,
+  defaultImportId,
+  meta,
+  onClose,
+  onSaved,
+}: {
+  campaign: Campaign | null;
+  defaultImportId: string;
+  meta: CrmMeta;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const dialog = useDialog();
+  const [f, setF] = useState({
+    name: campaign?.name ?? (defaultImportId ? meta.imports.find((i) => i.id === defaultImportId)?.name ?? '' : ''),
+    body: campaign?.body ?? 'Olá, {nome}! ',
+    url: campaign?.url ?? '',
+    importId: campaign?.importId ?? defaultImportId,
+  });
+  const [file, setFile] = useState<File | null>(null);
+  const [filePreview, setFilePreview] = useState<string | null>(null);
+  const [removeImage, setRemoveImage] = useState(false);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    if (!file) return setFilePreview(null);
+    const u = URL.createObjectURL(file);
+    setFilePreview(u);
+    return () => URL.revokeObjectURL(u);
+  }, [file]);
+
+  // Listas livres (sem campanha) + a lista atual desta campanha.
+  const taken = new Set(meta.campaigns.filter((c) => c.id !== campaign?.id && c.importId).map((c) => c.importId));
+  const lists = meta.imports.filter((i) => !taken.has(i.id));
+  const imageUrl = filePreview ?? (!removeImage ? campaign?.image?.url ?? null : null);
+  const sample = { name: 'Maria Souza', city: 'Cuiabá' } as Lead;
+  const previewText = [fillTemplate(f.body, sample), f.url.trim()].filter(Boolean).join('\n\n');
+
+  const save = async () => {
+    if (!f.name.trim()) return dialog.alert({ title: 'Informe o nome da campanha', tone: 'warning' });
+    if (!f.body.trim() && !imageUrl) return dialog.alert({ title: 'A campanha precisa de texto ou imagem', tone: 'warning' });
+    setSaving(true);
+    try {
+      const body = { name: f.name.trim(), body: f.body, url: f.url.trim(), importId: f.importId || null };
+      const saved = campaign ? await crm.updateCampaign(campaign.id, body) : await crm.createCampaign(body);
+      if (file) await crm.uploadCampaignImage(saved.id, file);
+      else if (removeImage && campaign?.image) await crm.deleteCampaignImage(saved.id);
+      dialog.toast(campaign ? 'Campanha atualizada.' : 'Campanha criada.');
+      onSaved();
+    } catch (e) {
+      dialog.alert({ title: 'Erro ao salvar a campanha', message: (e as Error).message, tone: 'danger' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      wide
+      title={campaign ? `Editar campanha · ${campaign.name}` : 'Nova campanha'}
+      onClose={onClose}
+      footer={
+        <>
+          <button className={btnGhost} onClick={onClose}>
+            Cancelar
+          </button>
+          <button className={btnPrimary} onClick={save} disabled={saving}>
+            {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />} Salvar campanha
+          </button>
+        </>
+      }
+    >
+      <div className="grid md:grid-cols-[1fr_300px] gap-5 text-xs">
+        <div className="space-y-3">
+          <Field label="Nome da campanha">
+            <input className={inputCls} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} maxLength={120} placeholder="Ex.: Convite audiência pública da saúde" />
+          </Field>
+          <Field label="Lista de leads" hint="Os atendentes enviam esta campanha aos leads da lista escolhida.">
+            <select className={inputCls} value={f.importId} onChange={(e) => setF({ ...f, importId: e.target.value })}>
+              <option value="">— Nenhuma (rascunho)</option>
+              {lists.map((i) => (
+                <option key={i.id} value={i.id}>
+                  {i.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Texto" hint="Use {nome}, {nome_completo} e {cidade}. Até 4.000 caracteres (com imagem, até 1.000 vão na legenda).">
+            <textarea className={`${inputCls} leading-relaxed`} rows={7} value={f.body} onChange={(e) => setF({ ...f, body: e.target.value })} maxLength={4000} />
+          </Field>
+          <Field label="Link (URL)" hint="Vai no final da mensagem. Ex.: inscrição, site, vídeo.">
+            <input className={inputCls} value={f.url} onChange={(e) => setF({ ...f, url: e.target.value })} placeholder="https://" inputMode="url" />
+          </Field>
+          <div className="space-y-1">
+            <span className="block text-[11px] font-semibold text-slate-700">Imagem</span>
+            <div className="flex flex-wrap items-center gap-2">
+              <label className={`${btnGhost} cursor-pointer`}>
+                <ImagePlus className="w-3.5 h-3.5" /> {imageUrl ? 'Trocar imagem' : 'Escolher imagem'}
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  className="hidden"
+                  onChange={(e) => {
+                    const fl = e.target.files?.[0];
+                    e.target.value = '';
+                    if (!fl) return;
+                    if (fl.size > 5 * 1024 * 1024) return dialog.alert({ title: 'Imagem maior que 5 MB', tone: 'warning' });
+                    setFile(fl);
+                    setRemoveImage(false);
+                  }}
+                />
+              </label>
+              {imageUrl && (
+                <button
+                  className={btnDanger}
+                  onClick={() => {
+                    setFile(null);
+                    setRemoveImage(true);
+                  }}
+                >
+                  <X className="w-3.5 h-3.5" /> Remover
+                </button>
+              )}
+              <span className="text-[10px] text-slate-500">JPG, PNG ou WEBP até 5 MB.</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Prévia estilo WhatsApp */}
+        <div>
+          <p className="text-[11px] font-semibold text-slate-700 mb-1.5">Prévia (para “Maria Souza”, Cuiabá)</p>
+          <div className="rounded-xl p-3 bg-[#E5DDD5] min-h-[200px]">
+            <div className="ml-auto max-w-[260px] bg-[#DCF8C6] rounded-lg shadow-xs overflow-hidden">
+              {imageUrl && <img src={imageUrl} alt="" className="w-full max-h-56 object-cover" />}
+              {previewText && <p className="px-2.5 py-1.5 text-[12px] text-slate-800 whitespace-pre-wrap break-words">{previewText}</p>}
+              <p className="text-[9px] text-slate-500 text-right px-2 pb-1">12:00 ✓✓</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Modal>
   );
 }

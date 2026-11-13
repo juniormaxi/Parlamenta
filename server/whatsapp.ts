@@ -22,6 +22,7 @@ import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_pro
 import express, { type Request, type Response, type NextFunction } from 'express';
 import QRCode from 'qrcode';
 import { db, audit, DATA_DIR } from './db';
+import { isBlocked, assertNotBlocked } from './blocklist';
 import { HttpError, bad } from './http';
 import { streamToFile, fileNameHeader } from './banco';
 
@@ -360,6 +361,7 @@ async function sendText(tenantId: string, to: string, text: string) {
 export async function queueWhatsApp(e: { tenantId: string; phone: unknown; body: string; kind: string; ref?: string }) {
   const to = toWaPhone(e.phone);
   if (!to) return;
+  if (await isBlocked(e.tenantId, to)) return; // LGPD: pediu para não receber mensagens
   const acc = (await db.prepare(`SELECT status, alerts_enabled FROM whatsapp_accounts WHERE tenant_id = ?`).get(e.tenantId)) as any;
   if (acc?.status !== 'connected' || !acc.alerts_enabled) return;
   await db
@@ -383,6 +385,10 @@ async function tick() {
         } else {
           await db.prepare(`UPDATE whatsapp_outbox SET next_try_at = datetime('now', '+2 minutes') WHERE id = ?`).run(row.id);
         }
+        continue;
+      }
+      if (await isBlocked(row.tenant_id, row.to_phone)) {
+        await db.prepare(`UPDATE whatsapp_outbox SET status = 'failed', last_error = ? WHERE id = ?`).run('Número bloqueado (LGPD).', row.id);
         continue;
       }
       try {
@@ -605,6 +611,7 @@ whatsappRouter.post('/read', async (req, res) => {
 /** Envia texto pelo número do gabinete (usado pelo CRM). Lança HttpError com mensagem amigável. */
 export async function sendWhatsAppText(tenantId: string, rawTo: unknown, text: string) {
   const to = recipient(rawTo);
+  await assertNotBlocked(tenantId, to);
   await requireOnline(tenantId);
   try {
     const r = await sendText(tenantId, to, text);
@@ -621,12 +628,33 @@ export async function sendWhatsAppText(tenantId: string, rawTo: unknown, text: s
   }
 }
 
+/** Envia um arquivo já salvo no servidor (ex.: imagem de campanha do CRM), com legenda opcional. */
+export async function sendWhatsAppFile(tenantId: string, rawTo: unknown, file: string, fileName: string, caption: string) {
+  const to = recipient(rawTo);
+  await assertNotBlocked(tenantId, to);
+  await requireOnline(tenantId);
+  const args = ['send', 'file', `--to=${to}`, `--file=${file}`, `--filename=${fileName}`];
+  if (caption) args.push(`--caption=${caption}`);
+  try {
+    const r = await run<any>(tenantId, args, { timeoutMs: 180_000 });
+    return { id: r?.id ?? '' };
+  } catch (e) {
+    const err = e as WaError;
+    if (err instanceof HttpError) throw err;
+    throw new HttpError(
+      502,
+      err.timedOut ? 'O envio da imagem não foi confirmado. Confira a conversa antes de reenviar.' : `WhatsApp recusou o envio da imagem: ${err.message}`
+    );
+  }
+}
+
 whatsappRouter.post('/send', async (req, res) => {
   const t = tid(req);
   const text = String(req.body?.text ?? '').trim();
   if (!text) throw bad('Digite a mensagem.');
   if (text.length > 4000) throw bad('Mensagem longa demais (máx. 4.000 caracteres).');
   const to = recipient(req.body?.to);
+  await assertNotBlocked(t, to);
   await requireOnline(t);
   try {
     const r = await sendText(t, to, text);
@@ -647,6 +675,7 @@ whatsappRouter.post('/send-file', async (req, res) => {
   const t = tid(req);
   const to = recipient(req.query.to);
   const caption = String(req.query.caption ?? '').slice(0, 1000);
+  await assertNotBlocked(t, to);
   await requireOnline(t);
   const name = fileNameHeader(req) || 'arquivo';
   const dest = path.join(TMP_DIR, `${crypto.randomUUID()}${path.extname(name).slice(0, 10)}`);

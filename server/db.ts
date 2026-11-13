@@ -543,6 +543,44 @@ const SCHEMA = `
     created_at TEXT NOT NULL DEFAULT datetime('now')
   );
   CREATE INDEX IF NOT EXISTS idx_crm_events_lead ON crm_lead_events(lead_id, created_at);
+
+  -- Campanha (mensagem: texto, imagem e link) vinculada a uma lista importada do CRM.
+  CREATE TABLE IF NOT EXISTS crm_campaigns (
+    id          TEXT PRIMARY KEY,
+    tenant_id   TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    import_id   TEXT UNIQUE REFERENCES crm_imports(id) ON DELETE SET NULL,
+    name        TEXT NOT NULL,
+    body        TEXT NOT NULL DEFAULT '',
+    url         TEXT NOT NULL DEFAULT '',
+    image_name  TEXT,
+    image_mime  TEXT,
+    image_size  INTEGER NOT NULL DEFAULT 0,
+    created_by  TEXT REFERENCES users(id) ON DELETE SET NULL,
+    created_at  TEXT NOT NULL DEFAULT datetime('now'),
+    updated_at  TEXT NOT NULL DEFAULT datetime('now')
+  );
+  CREATE INDEX IF NOT EXISTS idx_crm_campaigns_tenant ON crm_campaigns(tenant_id);
+
+  -- Mesma chave de server/blocklist.ts (blockKey): dígitos, sem 55, com o 9 do celular.
+  CREATE OR REPLACE FUNCTION phone_key(p text) RETURNS text LANGUAGE sql IMMUTABLE AS $$
+    SELECT CASE WHEN length(d) = 10 AND substr(d, 3, 1) IN ('6','7','8','9') THEN substr(d, 1, 2) || '9' || substr(d, 3) ELSE d END
+      FROM (SELECT CASE WHEN length(x) >= 12 AND left(x, 2) = '55' THEN substr(x, 3) ELSE x END AS d
+              FROM (SELECT regexp_replace(coalesce(p, ''), '[^0-9]', '', 'g') AS x) a) b
+  $$;
+
+  -- LGPD: números que pediram para não receber mais mensagens. Nenhum envio de WhatsApp sai para eles.
+  CREATE TABLE IF NOT EXISTS blocked_numbers (
+    id          TEXT PRIMARY KEY,
+    tenant_id   TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    phone_key   TEXT NOT NULL,
+    phone       TEXT NOT NULL,
+    name        TEXT NOT NULL DEFAULT '',
+    reason      TEXT NOT NULL DEFAULT '',
+    source      TEXT NOT NULL DEFAULT 'manual',
+    created_by  TEXT REFERENCES users(id) ON DELETE SET NULL,
+    created_at  TEXT NOT NULL DEFAULT datetime('now'),
+    UNIQUE (tenant_id, phone_key)
+  );
 `;
 
 /** Creates/updates the schema. A cluster-wide advisory lock keeps concurrent boots from racing. */
@@ -597,6 +635,8 @@ export async function tenantStorageBytes(): Promise<Map<string, number>> {
        + COALESCE((SELECT SUM(length(COALESCE(i.rows_json,'')) + 96) FROM contact_imports i WHERE i.tenant_id = t.id), 0)
        + COALESCE((SELECT SUM(length(ci.title) + length(ci.summary) + length(ci.url) + 200) FROM clipping_items ci WHERE ci.tenant_id = t.id), 0)
        + COALESCE((SELECT SUM(length(p.data) + 128) FROM protocols p WHERE p.tenant_id = t.id), 0)
+       + COALESCE((SELECT SUM(length(l.name) + length(l.email) + length(l.notes) + length(l.agent_notes) + 96) FROM crm_leads l WHERE l.tenant_id = t.id), 0)
+       + COALESCE((SELECT SUM(length(cc.body) + length(cc.url) + cc.image_size + 128) FROM crm_campaigns cc WHERE cc.tenant_id = t.id), 0)
          AS bytes
        FROM tenants t`
     )

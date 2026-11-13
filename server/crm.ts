@@ -4,12 +4,15 @@
  * Montado em /api/tenant/crm — toda consulta é filtrada por req.auth.tenantId (sessão no servidor).
  */
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import express, { type Request } from 'express';
 import ExcelJS from 'exceljs';
-import { db, tx, audit } from './db';
+import { db, tx, audit, DATA_DIR } from './db';
 import { HttpError, bad } from './http';
-import { readBody, readSheet, fileNameHeader } from './banco';
-import { sendWhatsAppText, toWaPhone } from './whatsapp';
+import { readBody, readSheet, fileNameHeader, streamToFile } from './banco';
+import { sendWhatsAppText, sendWhatsAppFile, toWaPhone } from './whatsapp';
+import { blockKey, blockNumber, blockedKeys, isBlocked } from './blocklist';
 
 export const crmRouter = express.Router();
 
@@ -19,10 +22,10 @@ const MAX_IMPORT_BYTES = 10 * 1024 * 1024;
 const MAX_IMPORT_ROWS = 20_000;
 const PAGE = 100;
 
-export const LEAD_STATUSES = ['novo', 'contatado', 'interessado', 'retornar', 'sem_resposta', 'sem_interesse', 'numero_invalido', 'convertido'] as const;
+export const LEAD_STATUSES = ['novo', 'contatado', 'interessado', 'retornar', 'sem_resposta', 'sem_interesse', 'numero_invalido', 'bloqueado', 'convertido'] as const;
 type LeadStatus = (typeof LEAD_STATUSES)[number];
 /** Situações que encerram o atendimento (não contam como carga aberta na distribuição). */
-const CLOSED: LeadStatus[] = ['sem_interesse', 'numero_invalido', 'convertido'];
+const CLOSED: LeadStatus[] = ['sem_interesse', 'numero_invalido', 'bloqueado', 'convertido'];
 
 const tid = (req: Request) => req.auth!.tenantId!;
 const uid = (req: Request) => req.auth!.userId;
@@ -154,16 +157,15 @@ crmRouter.get('/meta', async (req, res) => {
         GROUP BY u.id ORDER BY u.name`
     )
     .all(CLOSED, t)) as any[];
-  const imports = canManage(req)
-    ? ((await db
+  const imports = ((await db
         .prepare(
           `SELECT i.id, i.name, i.file_name, i.total, i.created_at, u.name AS created_by_name,
                   (SELECT COUNT(*)::int FROM crm_leads l WHERE l.import_id = i.id) AS remaining
              FROM crm_imports i LEFT JOIN users u ON u.id = i.created_by
             WHERE i.tenant_id = ? ORDER BY i.created_at DESC LIMIT 100`
         )
-        .all(t)) as any[])
-    : [];
+        .all(t)) as any[]);
+  const campaigns = ((await db.prepare(`SELECT * FROM crm_campaigns WHERE tenant_id = ? ORDER BY created_at DESC`).all(t)) as any[]).map(mapCampaign);
   const unassigned = (await db.prepare(`SELECT COUNT(*)::int AS n FROM crm_leads WHERE tenant_id = ? AND assigned_to IS NULL`).get(t)) as any;
   res.json({
     canManage: canManage(req),
@@ -179,6 +181,7 @@ crmRouter.get('/meta', async (req, res) => {
       createdAt: i.created_at,
       createdBy: i.created_by_name ?? '',
     })),
+    campaigns,
   });
 });
 
@@ -276,9 +279,16 @@ crmRouter.patch('/leads/:id', async (req, res) => {
     const s = String(req.body.status);
     if (!(LEAD_STATUSES as readonly string[]).includes(s)) throw bad('Classificação inválida.');
     if (s !== lead.status) {
+      if (lead.status === 'bloqueado') {
+        throw new HttpError(409, 'Este número pediu para não receber mensagens. O desbloqueio é feito em Administração & LGPD › Números Bloqueados.');
+      }
       sets.push(`status = ?`, `status_at = datetime('now')`, `status_by = ?`);
       params.push(s, uid(req));
       await logEvent(t, lead.id, uid(req), 'classificado', s);
+      if (s === 'bloqueado' && lead.phone) {
+        await blockNumber({ tenantId: t, phone: lead.phone, name: lead.name, reason: 'Pediu para não receber mais mensagens (CRM)', source: 'crm', userId: uid(req) });
+        await audit({ ...actor(req), action: 'blocklist.added', target: blockKey(lead.phone) ?? lead.phone, details: { from: 'crm', lead: lead.id } });
+      }
     }
   }
   if (req.body?.agentNotes !== undefined) {
@@ -305,8 +315,12 @@ crmRouter.patch('/leads/:id', async (req, res) => {
       }
     }
     if (req.body?.phone !== undefined) {
+      const phone = normPhone(req.body.phone);
+      if (phone && phone !== lead.phone && (await isBlocked(t, phone))) {
+        throw new HttpError(409, 'Este número está na lista de Números Bloqueados (LGPD).');
+      }
       sets.push(`phone = ?`);
-      params.push(normPhone(req.body.phone));
+      params.push(phone);
     }
   }
   if (sets.length) {
@@ -336,19 +350,39 @@ async function markContacted(req: Request, lead: any, via: string, text: string)
 }
 
 /** Envia a mensagem pelo número do gabinete conectado em Canais & Integrações. */
+async function assertCanMessage(req: Request, lead: any) {
+  if (lead.status === 'bloqueado' || (await isBlocked(tid(req), lead.phone))) {
+    throw new HttpError(409, 'Este número pediu para não receber mensagens (Números Bloqueados · LGPD).');
+  }
+  if (!toWaPhone(lead.phone)) throw bad('Este lead não tem um celular válido com DDD.');
+}
+
 crmRouter.post('/leads/:id/whatsapp', async (req, res) => {
   const lead = await loadLead(req, req.params.id!);
   const text = String(req.body?.text ?? '').trim();
-  if (!text) throw bad('Digite a mensagem.');
   if (text.length > 4000) throw bad('Mensagem longa demais (máx. 4.000 caracteres).');
-  if (!toWaPhone(lead.phone)) throw bad('Este lead não tem um celular válido com DDD.');
-  const sent = await sendWhatsAppText(tid(req), lead.phone, text);
-  res.json({ lead: await markContacted(req, lead, 'gabinete', text), warning: sent.warning });
+  await assertCanMessage(req, lead);
+  let warning: string | null = null;
+  const camp = req.body?.campaignId
+    ? ((await db.prepare(`SELECT * FROM crm_campaigns WHERE id = ? AND tenant_id = ?`).get(String(req.body.campaignId), tid(req))) as any)
+    : null;
+  if (req.body?.withImage && camp?.image_name) {
+    // Legenda da imagem tem limite; textos longos vão em mensagem separada logo depois.
+    const caption = text.length <= 1000 ? text : '';
+    await sendWhatsAppFile(tid(req), lead.phone, campaignImagePath(tid(req), camp), camp.image_name, caption);
+    if (text && !caption) warning = (await sendWhatsAppText(tid(req), lead.phone, text)).warning;
+  } else {
+    if (!text) throw bad('Digite a mensagem.');
+    warning = (await sendWhatsAppText(tid(req), lead.phone, text)).warning;
+  }
+  const detail = camp ? `[${camp.name}${req.body?.withImage && camp.image_name ? ' + imagem' : ''}] ${text}` : text;
+  res.json({ lead: await markContacted(req, lead, 'gabinete', detail), warning });
 });
 
 /** Registra o contato feito pelo WhatsApp do próprio usuário (link wa.me). */
 crmRouter.post('/leads/:id/contacted', async (req, res) => {
   const lead = await loadLead(req, req.params.id!);
+  await assertCanMessage(req, lead);
   res.json({ lead: await markContacted(req, lead, 'link', String(req.body?.text ?? '')) });
 });
 
@@ -527,6 +561,8 @@ crmRouter.post('/import/preview', async (req, res) => {
   const existing = (await db.prepare(`SELECT phone, email FROM crm_leads WHERE tenant_id = ?`).all(t)) as any[];
   const seenPhones = new Set(existing.map((e) => e.phone).filter(Boolean));
   const seenEmails = new Set(existing.map((e) => e.email).filter(Boolean));
+  const blocked = await blockedKeys(t);
+  let blockedCount = 0;
   const inFilePhones = new Set<string>();
   const inFileEmails = new Set<string>();
 
@@ -549,6 +585,11 @@ crmRouter.post('/import/preview', async (req, res) => {
     if (email && !isEmail(email)) return errors.push({ line, name, reason: `E-mail inválido: ${email}` });
     if (phone && (phone.length < 10 || phone.length > 13)) return errors.push({ line, name, reason: `Telefone inválido: ${get(r, 'phone')}` });
     if (!phone && !email) return errors.push({ line, name, reason: 'Sem telefone e sem e-mail.' });
+    const key = blockKey(phone);
+    if (key && blocked.has(key)) {
+      blockedCount++;
+      return errors.push({ line, name, reason: 'Número bloqueado (LGPD): pediu para não receber mensagens.' });
+    }
     if ((phone && inFilePhones.has(phone)) || (email && inFileEmails.has(email))) {
       return errors.push({ line, name, reason: 'Repetido na própria planilha.' });
     }
@@ -567,6 +608,7 @@ crmRouter.post('/import/preview', async (req, res) => {
     valid: leads.length,
     duplicates: leads.filter((l) => l.duplicate).length,
     withoutWhatsApp: leads.filter((l) => !toWaPhone(l.phone)).length,
+    blocked: blockedCount,
     skippedExamples,
     ignoredColumns: ignored,
     errors: errors.slice(0, 200),
@@ -582,7 +624,8 @@ crmRouter.post('/import/:token/confirm', async (req, res) => {
   if (!p || p.tenantId !== t || p.expires < Date.now()) throw bad('A prévia expirou. Envie a planilha novamente.');
   const userIds = await activeUserIds(t, req.body?.userIds);
   const skipDuplicates = req.body?.skipDuplicates !== false;
-  const leads = p.leads.filter((l) => !(skipDuplicates && l.duplicate));
+  const blockedNow = await blockedKeys(t);
+  const leads = p.leads.filter((l) => !(skipDuplicates && l.duplicate) && !(l.phone && blockedNow.has(blockKey(l.phone) ?? '')));
   if (!leads.length) throw bad('Nenhum lead novo para importar (todos já existem no CRM).');
   const name = clean(req.body?.name, 120) || p.fileName.replace(/\.(xlsx|csv)$/i, '');
 
@@ -610,4 +653,204 @@ crmRouter.post('/import/:token/confirm', async (req, res) => {
   pending.delete(String(req.params.token));
   await audit({ ...actor(req), action: 'crm.import', target: name, details: { imported: result.imported, users: userIds.length } });
   res.json(result);
+});
+
+// ---------------------------------------------------------------------------
+// Listas (cada importação é uma lista/campanha)
+// ---------------------------------------------------------------------------
+crmRouter.get('/lists', async (req, res) => {
+  requireManager(req);
+  const t = tid(req);
+  const rows = (await db
+    .prepare(
+      `SELECT i.id, i.name, i.file_name, i.total, i.created_at, u.name AS created_by_name,
+              c.id AS campaign_id, c.name AS campaign_name
+         FROM crm_imports i
+         LEFT JOIN users u ON u.id = i.created_by
+         LEFT JOIN crm_campaigns c ON c.import_id = i.id
+        WHERE i.tenant_id = ? ORDER BY i.created_at DESC`
+    )
+    .all(t)) as any[];
+  const stats = (await db
+    .prepare(
+      `SELECT import_id, status, COUNT(*)::int AS n,
+              COUNT(*) FILTER (WHERE assigned_to IS NULL)::int AS unassigned,
+              COUNT(*) FILTER (WHERE contact_count > 0)::int AS contacted
+         FROM crm_leads WHERE tenant_id = ? AND import_id IS NOT NULL GROUP BY import_id, status`
+    )
+    .all(t)) as any[];
+  const by = new Map<string, { counts: Record<string, number>; leads: number; unassigned: number; contacted: number }>();
+  for (const s of stats) {
+    const e = by.get(s.import_id) ?? { counts: {}, leads: 0, unassigned: 0, contacted: 0 };
+    e.counts[s.status] = s.n;
+    e.leads += s.n;
+    e.unassigned += s.unassigned;
+    e.contacted += s.contacted;
+    by.set(s.import_id, e);
+  }
+  res.json(
+    rows.map((r) => {
+      const e = by.get(r.id) ?? { counts: {}, leads: 0, unassigned: 0, contacted: 0 };
+      return {
+        id: r.id,
+        name: r.name,
+        fileName: r.file_name,
+        imported: r.total,
+        createdAt: r.created_at,
+        createdBy: r.created_by_name ?? '',
+        campaign: r.campaign_id ? { id: r.campaign_id, name: r.campaign_name } : null,
+        ...e,
+      };
+    })
+  );
+});
+
+crmRouter.patch('/imports/:id', async (req, res) => {
+  requireManager(req);
+  const name = clean(req.body?.name, 120);
+  if (!name) throw bad('Informe o nome da lista.');
+  const r = await db.prepare(`UPDATE crm_imports SET name = ? WHERE id = ? AND tenant_id = ?`).run(name, req.params.id, tid(req));
+  if (!r.changes) throw new HttpError(404, 'Lista não encontrada.');
+  res.json({ ok: true });
+});
+
+/** Distribui os leads sem responsável de uma lista. */
+crmRouter.post('/imports/:id/distribute', async (req, res) => {
+  requireManager(req);
+  const t = tid(req);
+  const userIds = await activeUserIds(t, req.body?.userIds);
+  if (!userIds.length) throw bad('Selecione ao menos um usuário para receber os leads.');
+  const ids = ((await db
+    .prepare(`SELECT id FROM crm_leads WHERE tenant_id = ? AND import_id = ? AND assigned_to IS NULL ORDER BY created_at, name`)
+    .all(t, req.params.id)) as any[]).map((r) => r.id);
+  if (!ids.length) throw bad('Esta lista não tem leads sem responsável.');
+  const summary = await tx(() => distribute(t, ids, userIds, uid(req)));
+  await audit({ ...actor(req), action: 'crm.leads_distributed', details: { count: ids.length, users: userIds.length, importId: req.params.id } });
+  res.json({ distributed: ids.length, perUser: Object.fromEntries(summary) });
+});
+
+// ---------------------------------------------------------------------------
+// Campanhas: texto, imagem e link enviados aos leads de uma lista
+// ---------------------------------------------------------------------------
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const IMAGE_TYPES: Record<string, string> = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp' };
+const CAMPAIGN_DIR = path.join(DATA_DIR, 'crm');
+
+function campaignImagePath(tenantId: string, c: { id: string; image_name: string | null }) {
+  return path.join(CAMPAIGN_DIR, tenantId, `${c.id}${path.extname(c.image_name ?? '').toLowerCase()}`);
+}
+
+function mapCampaign(c: any) {
+  return {
+    id: c.id,
+    importId: c.import_id,
+    name: c.name,
+    body: c.body,
+    url: c.url,
+    image: c.image_name ? { name: c.image_name, size: c.image_size, url: `/api/tenant/crm/campaigns/${c.id}/image?v=${encodeURIComponent(c.updated_at)}` } : null,
+    createdAt: c.created_at,
+    updatedAt: c.updated_at,
+  };
+}
+
+async function loadCampaign(req: Request) {
+  const c = (await db.prepare(`SELECT * FROM crm_campaigns WHERE id = ? AND tenant_id = ?`).get(req.params.id, tid(req))) as any;
+  if (!c) throw new HttpError(404, 'Campanha não encontrada.');
+  return c;
+}
+
+async function campaignFields(req: Request, current?: any) {
+  const b = req.body ?? {};
+  const name = b.name !== undefined ? clean(b.name, 120) : current?.name;
+  if (!name) throw bad('Informe o nome da campanha.');
+  const body = b.body !== undefined ? String(b.body ?? '').trim().slice(0, 4000) : current?.body ?? '';
+  let url = b.url !== undefined ? String(b.url ?? '').trim().slice(0, 1000) : current?.url ?? '';
+  if (url && !/^https?:\/\//i.test(url)) url = `https://${url}`;
+  if (url) {
+    try {
+      new URL(url);
+    } catch {
+      throw bad('Link inválido.');
+    }
+  }
+  let importId: string | null = b.importId !== undefined ? (b.importId ? String(b.importId) : null) : current?.import_id ?? null;
+  if (importId) {
+    const imp = await db.prepare(`SELECT 1 FROM crm_imports WHERE id = ? AND tenant_id = ?`).get(importId, tid(req));
+    if (!imp) throw bad('Lista não encontrada.');
+    const other = (await db.prepare(`SELECT name FROM crm_campaigns WHERE import_id = ? AND id <> ?`).get(importId, current?.id ?? '')) as any;
+    if (other) throw new HttpError(409, `Esta lista já está vinculada à campanha "${other.name}".`);
+  }
+  return { name, body, url, importId };
+}
+
+crmRouter.get('/campaigns', async (req, res) => {
+  res.json(((await db.prepare(`SELECT * FROM crm_campaigns WHERE tenant_id = ? ORDER BY created_at DESC`).all(tid(req))) as any[]).map(mapCampaign));
+});
+
+crmRouter.post('/campaigns', async (req, res) => {
+  requireManager(req);
+  const f = await campaignFields(req);
+  const id = crypto.randomUUID();
+  await db
+    .prepare(`INSERT INTO crm_campaigns (id, tenant_id, import_id, name, body, url, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+    .run(id, tid(req), f.importId, f.name, f.body, f.url, uid(req));
+  await audit({ ...actor(req), action: 'crm.campaign_created', target: f.name });
+  res.status(201).json(mapCampaign(await db.prepare(`SELECT * FROM crm_campaigns WHERE id = ?`).get(id)));
+});
+
+crmRouter.patch('/campaigns/:id', async (req, res) => {
+  requireManager(req);
+  const c = await loadCampaign(req);
+  const f = await campaignFields(req, c);
+  await db
+    .prepare(`UPDATE crm_campaigns SET name = ?, body = ?, url = ?, import_id = ?, updated_at = datetime('now') WHERE id = ?`)
+    .run(f.name, f.body, f.url, f.importId, c.id);
+  res.json(mapCampaign(await db.prepare(`SELECT * FROM crm_campaigns WHERE id = ?`).get(c.id)));
+});
+
+crmRouter.delete('/campaigns/:id', async (req, res) => {
+  requireManager(req);
+  const c = await loadCampaign(req);
+  await db.prepare(`DELETE FROM crm_campaigns WHERE id = ?`).run(c.id);
+  if (c.image_name) fs.rm(campaignImagePath(tid(req), c), { force: true }, () => undefined);
+  await audit({ ...actor(req), action: 'crm.campaign_deleted', target: c.name });
+  res.json({ ok: true });
+});
+
+crmRouter.put('/campaigns/:id/image', async (req, res) => {
+  requireManager(req);
+  const c = await loadCampaign(req);
+  const name = fileNameHeader(req) || 'imagem.jpg';
+  const ext = path.extname(name).toLowerCase();
+  if (!IMAGE_TYPES[ext]) throw bad('Envie uma imagem JPG, PNG ou WEBP.');
+  const tmp = path.join(CAMPAIGN_DIR, tid(req), `.${crypto.randomUUID()}${ext}`);
+  const size = await streamToFile(req, tmp, MAX_IMAGE_BYTES);
+  if (!size) {
+    fs.rmSync(tmp, { force: true });
+    throw bad('Arquivo vazio.');
+  }
+  if (c.image_name) fs.rmSync(campaignImagePath(tid(req), c), { force: true });
+  fs.renameSync(tmp, campaignImagePath(tid(req), { id: c.id, image_name: name }));
+  await db
+    .prepare(`UPDATE crm_campaigns SET image_name = ?, image_mime = ?, image_size = ?, updated_at = datetime('now') WHERE id = ?`)
+    .run(name.slice(0, 200), IMAGE_TYPES[ext], size, c.id);
+  res.json(mapCampaign(await db.prepare(`SELECT * FROM crm_campaigns WHERE id = ?`).get(c.id)));
+});
+
+crmRouter.delete('/campaigns/:id/image', async (req, res) => {
+  requireManager(req);
+  const c = await loadCampaign(req);
+  if (c.image_name) fs.rmSync(campaignImagePath(tid(req), c), { force: true });
+  await db.prepare(`UPDATE crm_campaigns SET image_name = NULL, image_mime = NULL, image_size = 0, updated_at = datetime('now') WHERE id = ?`).run(c.id);
+  res.json(mapCampaign(await db.prepare(`SELECT * FROM crm_campaigns WHERE id = ?`).get(c.id)));
+});
+
+crmRouter.get('/campaigns/:id/image', async (req, res) => {
+  const c = await loadCampaign(req);
+  const file = c.image_name ? campaignImagePath(tid(req), c) : '';
+  if (!file || !fs.existsSync(file)) throw new HttpError(404, 'Imagem não encontrada.');
+  res.setHeader('Content-Type', c.image_mime || 'application/octet-stream');
+  res.setHeader('Cache-Control', 'private, max-age=86400');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  fs.createReadStream(file).pipe(res);
 });

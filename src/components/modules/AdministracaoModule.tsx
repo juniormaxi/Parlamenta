@@ -24,8 +24,10 @@ import {
   ArrowRight,
   SlidersHorizontal,
   BookOpen,
+  Ban,
 } from 'lucide-react';
 import { GuiaDocumentacaoModal } from './GuiaDocumentacaoModal';
+import { BlockedNumbersPanel } from './admin/BlockedNumbersPanel';
 import { AuditLog, TeamMember } from '../../types';
 import { useDialog } from '../common/Dialogs';
 
@@ -39,7 +41,7 @@ export const AdministracaoModule: React.FC<AdministracaoModuleProps> = ({
   teamMembers,
 }) => {
   const dialog = useDialog();
-  const [activeTab, setActiveTab] = useState<'usuarios' | 'sla' | 'seguranca' | 'auditoria' | 'ia' | 'docs'>('ia');
+  const [activeTab, setActiveTab] = useState<'usuarios' | 'sla' | 'seguranca' | 'auditoria' | 'ia' | 'docs' | 'bloqueados'>('ia');
 
   // SLA rules
   const [slaRules, setSlaRules] = useState([
@@ -165,7 +167,7 @@ export const AdministracaoModule: React.FC<AdministracaoModuleProps> = ({
           </p>
         </div>
 
-        <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg overflow-x-auto">
+        <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-100 rounded-lg">
           <button
             onClick={() => setActiveTab('ia')}
             className={`px-3 py-1.5 text-xs font-semibold rounded-md whitespace-nowrap transition-colors flex items-center gap-1.5 ${
@@ -187,6 +189,17 @@ export const AdministracaoModule: React.FC<AdministracaoModuleProps> = ({
           >
             <History className="w-3.5 h-3.5 text-[#176B80]" />
             <span>Logs de Auditoria</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('bloqueados')}
+            className={`px-3 py-1.5 text-xs font-semibold rounded-md whitespace-nowrap transition-colors flex items-center gap-1.5 ${
+              activeTab === 'bloqueados'
+                ? 'bg-white text-slate-900 shadow-xs font-bold'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <Ban className="w-3.5 h-3.5 text-red-800" />
+            <span>Números Bloqueados</span>
           </button>
           <button
             onClick={() => setActiveTab('usuarios')}
@@ -234,6 +247,9 @@ export const AdministracaoModule: React.FC<AdministracaoModuleProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Tab: Números Bloqueados (LGPD) */}
+      {activeTab === 'bloqueados' && <BlockedNumbersPanel />}
 
       {/* Tab: Documentação Técnica */}
       {activeTab === 'docs' && <GuiaDocumentacaoModal isOpen embedded onClose={() => setActiveTab('ia')} />}

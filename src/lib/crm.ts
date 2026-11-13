@@ -1,7 +1,7 @@
 /** Cliente do CRM de leads (server/crm.ts). */
 import { api, uploadFile } from './api';
 
-export type LeadStatus = 'novo' | 'contatado' | 'interessado' | 'retornar' | 'sem_resposta' | 'sem_interesse' | 'numero_invalido' | 'convertido';
+export type LeadStatus = 'novo' | 'contatado' | 'interessado' | 'retornar' | 'sem_resposta' | 'sem_interesse' | 'numero_invalido' | 'bloqueado' | 'convertido';
 
 export interface Lead {
   id: string;
@@ -42,12 +42,48 @@ export interface CrmImport {
   createdBy: string;
 }
 
+export interface Campaign {
+  id: string;
+  importId: string | null;
+  name: string;
+  body: string;
+  url: string;
+  image: { name: string; size: number; url: string } | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CrmList {
+  id: string;
+  name: string;
+  fileName: string;
+  imported: number;
+  createdAt: string;
+  createdBy: string;
+  campaign: { id: string; name: string } | null;
+  counts: Partial<Record<LeadStatus, number>>;
+  leads: number;
+  unassigned: number;
+  contacted: number;
+}
+
 export interface CrmMeta {
   canManage: boolean;
   me: string;
   users: CrmUser[];
   unassigned: number;
   imports: CrmImport[];
+  campaigns: Campaign[];
+}
+
+export interface BlockedNumber {
+  id: string;
+  phone: string;
+  name: string;
+  reason: string;
+  source: string;
+  createdAt: string;
+  createdBy: string;
 }
 
 export interface LeadPage {
@@ -72,6 +108,7 @@ export interface ImportPreview {
   valid: number;
   duplicates: number;
   withoutWhatsApp: number;
+  blocked: number;
   skippedExamples: number;
   ignoredColumns: string[];
   errors: { line: number; name: string; reason: string }[];
@@ -92,8 +129,8 @@ export const crm = {
   events: (id: string) => api<LeadEvent[]>(`/tenant/crm/leads/${id}/events`),
   update: (id: string, body: Partial<Pick<Lead, 'status' | 'agentNotes' | 'name' | 'email' | 'phone' | 'city' | 'notes'>>) =>
     api<Lead>(`/tenant/crm/leads/${id}`, { method: 'PATCH', body }),
-  sendWhatsApp: (id: string, text: string) =>
-    api<{ lead: Lead; warning: string | null }>(`/tenant/crm/leads/${id}/whatsapp`, { method: 'POST', body: { text } }),
+  sendWhatsApp: (id: string, text: string, campaign?: { campaignId: string; withImage: boolean }) =>
+    api<{ lead: Lead; warning: string | null }>(`/tenant/crm/leads/${id}/whatsapp`, { method: 'POST', body: { text, ...campaign } }),
   markContacted: (id: string, text: string) => api<{ lead: Lead }>(`/tenant/crm/leads/${id}/contacted`, { method: 'POST', body: { text } }),
   assign: (leadIds: string[], userId: string | null) => api<{ updated: number }>('/tenant/crm/assign', { method: 'POST', body: { leadIds, userId } }),
   distribute: (body: { userIds: string[]; leadIds?: string[]; scope?: 'unassigned' }) =>
@@ -104,4 +141,22 @@ export const crm = {
   confirm: (token: string, body: { userIds: string[]; skipDuplicates: boolean; name: string }) =>
     api<{ importId: string; imported: number; perUser: Record<string, number> }>(`/tenant/crm/import/${token}/confirm`, { method: 'POST', body }),
   templateUrl: '/api/tenant/crm/template',
+  lists: () => api<CrmList[]>('/tenant/crm/lists'),
+  renameList: (id: string, name: string) => api(`/tenant/crm/imports/${id}`, { method: 'PATCH', body: { name } }),
+  distributeList: (id: string, userIds: string[]) =>
+    api<{ distributed: number; perUser: Record<string, number> }>(`/tenant/crm/imports/${id}/distribute`, { method: 'POST', body: { userIds } }),
+  campaigns: () => api<Campaign[]>('/tenant/crm/campaigns'),
+  createCampaign: (body: { name: string; body: string; url: string; importId: string | null }) =>
+    api<Campaign>('/tenant/crm/campaigns', { method: 'POST', body }),
+  updateCampaign: (id: string, body: { name: string; body: string; url: string; importId: string | null }) =>
+    api<Campaign>(`/tenant/crm/campaigns/${id}`, { method: 'PATCH', body }),
+  deleteCampaign: (id: string) => api(`/tenant/crm/campaigns/${id}`, { method: 'DELETE' }),
+  uploadCampaignImage: (id: string, file: File) => uploadFile<Campaign>(`/tenant/crm/campaigns/${id}/image`, file, { method: 'PUT' }),
+  deleteCampaignImage: (id: string) => api<Campaign>(`/tenant/crm/campaigns/${id}/image`, { method: 'DELETE' }),
+};
+
+export const blocklist = {
+  list: (q = '') => api<{ canUnblock: boolean; items: BlockedNumber[] }>(`/tenant/blocklist${q ? `?q=${encodeURIComponent(q)}` : ''}`),
+  add: (body: { phone: string; name: string; reason: string }) => api('/tenant/blocklist', { method: 'POST', body }),
+  remove: (id: string) => api(`/tenant/blocklist/${id}`, { method: 'DELETE' }),
 };
