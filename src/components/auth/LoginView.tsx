@@ -160,8 +160,8 @@ export const LoginView: React.FC<LoginViewProps> = ({
           <div className="space-y-6">
             {/* Brand Mark Lockup */}
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#36B7A5] to-[#176B80] text-[#102C45] flex items-center justify-center font-bold font-mono text-xl shadow-lg shadow-[#36B7A5]/20">
-                P
+              <div className="w-10 h-10 rounded-xl bg-white flex items-center justify-center shadow-lg shadow-[#36B7A5]/20 p-1.5">
+                <img src="/logo-parlamentta.png" alt="Parlamentta" className="w-full h-full object-contain" />
               </div>
               <div>
                 <span className="text-2xl font-extrabold tracking-tight text-white block leading-none">

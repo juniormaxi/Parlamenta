@@ -126,8 +126,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="h-16 px-4 flex items-center justify-between border-b border-[#176B80]/40">
         {!collapsed ? (
           <div className="flex items-center gap-2.5 overflow-hidden">
-            <div className="w-8 h-8 rounded-lg bg-[#36B7A5] text-[#102C45] flex items-center justify-center font-bold font-mono text-base shrink-0 shadow-xs">
-              P
+<div className="w-8 h-8 rounded-lg bg-white flex items-center justify-center shrink-0 shadow-xs p-1">
+              <img src="/logo-parlamentta.png" alt="Parlamentta" className="w-full h-full object-contain" />
             </div>
             <div className="truncate">
               <span className="text-base font-bold tracking-tight text-white block leading-none">
@@ -139,8 +139,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </div>
           </div>
         ) : (
-          <div className="mx-auto w-8 h-8 rounded-lg bg-[#36B7A5] text-[#102C45] flex items-center justify-center font-bold font-mono text-base shadow-xs">
-            P
+          <div className="mx-auto w-8 h-8 rounded-lg bg-white flex items-center justify-center shadow-xs p-1">
+            <img src="/logo-parlamentta.png" alt="Parlamentta" className="w-full h-full object-contain" />
           </div>
         )}
 
