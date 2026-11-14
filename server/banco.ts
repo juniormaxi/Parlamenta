@@ -45,7 +45,7 @@ function requireManager(req: Request) {
 
 async function assertQuota(tenantId: string, extraBytes: number) {
   const t = await db.prepare(`SELECT storage_quota_mb FROM tenants WHERE id = ?`).get(tenantId) as any;
-  const used = (await tenantStorageBytes()).get(tenantId) ?? 0;
+  const used = (await tenantStorageBytes(tenantId)).get(tenantId) ?? 0;
   if (used + extraBytes > t.storage_quota_mb * 1024 * 1024) {
     throw new HttpError(413, 'Cota de armazenamento do gabinete esgotada. Solicite ampliação ao administrador da plataforma.');
   }

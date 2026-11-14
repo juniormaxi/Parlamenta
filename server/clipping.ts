@@ -85,10 +85,29 @@ interface RawItem {
   publishedAt: string;
 }
 
-function parseFeed(xml: string): { title: string; items: RawItem[] } | null {
+/**
+ * Feeds vêm de sites de terceiros. RSS/Atom não precisam de DOCTYPE, e é por ele que entram as entidades
+ * personalizadas (expansão exponencial, "billion laughs"). Por isso o DOCTYPE inteiro, com o subconjunto
+ * interno [...], é descartado antes da leitura; sobram só as entidades padrão do XML e do HTML.
+ */
+export function stripDoctype(xml: string) {
+  return xml.replace(/<!DOCTYPE(?:[^\[>]|\[[\s\S]*?\])*>/gi, '');
+}
+
+/** Só links http(s) entram na base (um feed poderia mandar javascript:, data: etc.). */
+export function safeLink(raw: string): string {
+  try {
+    const u = new URL(raw);
+    return u.protocol === 'http:' || u.protocol === 'https:' ? u.toString() : '';
+  } catch {
+    return '';
+  }
+}
+
+export function parseFeed(xml: string): { title: string; items: RawItem[] } | null {
   let doc: any;
   try {
-    doc = parser.parse(xml);
+    doc = parser.parse(stripDoctype(xml));
   } catch {
     return null;
   }
@@ -237,7 +256,7 @@ export async function runCollection(tenantId: string, trigger: 'auto' | 'manual'
     const candidates = new Map<string, RawItem & { origin: string; topics: Set<string> }>();
 
     const add = (it: RawItem, origin: string, topicNames: string[]) => {
-      if (!it.url || !it.title) return;
+      if (!safeLink(it.url) || !it.title) return;
       const pub = Date.parse(it.publishedAt);
       if (pub && pub < cutoff) return;
       const url = normalizeUrl(it.url);
@@ -610,7 +629,7 @@ function itemFilter(req: Request, { ignoreSentiment = false } = {}) {
 
 const publicItem = (r: any) => ({
   id: r.id,
-  url: r.url,
+  url: safeLink(r.url),
   title: r.title,
   summary: r.summary,
   sourceName: r.source_name,

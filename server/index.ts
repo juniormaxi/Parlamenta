@@ -21,8 +21,9 @@ import { rlsStatus } from './kb/context';
 import { startMetrics, metricsSummary } from './kb/metrics';
 import { plenarioRouter, startPlenarioScheduler, normalizeSaplUrl } from './plenario';
 import { ufInfo, seatLimits, defaultHouse, type Sphere } from '../src/lib/chamber';
-import { db, tx, pool, audit, tenantStorageBytes, dbFileBytes } from './db';
+import { db, tx, pool, audit, tenantStorageBytes, dbFileBytes, purgeTenantFiles } from './db';
 import { assertSchemaCurrent } from './migrations';
+import { securityHeaders } from './securityHeaders';
 import {
   TENANT_ROLES,
   TENANT_ADMIN_ROLES,
@@ -43,11 +44,14 @@ import {
   loginBlocked,
   registerLoginFailure,
   clearLoginFailures,
+  loginKeys,
+  purgeExpiredSessions,
   login,
 } from './auth';
 
 // Railway injects PORT and requires listening on all interfaces.
 const PORT = Number(process.env.API_PORT || process.env.PORT || 3001);
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 const HOST = process.env.API_HOST || (process.env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1');
 
 // ---------------------------------------------------------------------------
@@ -59,6 +63,11 @@ async function bootstrapSuperAdmin() {
   const email = (process.env.SUPERADMIN_EMAIL || 'admin@parlamentta.local').toLowerCase();
   let password = process.env.SUPERADMIN_PASSWORD || '';
   const generated = !password;
+  // Em produção a senha nunca é gerada nem impressa: logs ficam guardados na plataforma e são lidos por
+  // mais gente do que deveria conhecer a senha do administrador.
+  if (generated && IS_PRODUCTION) {
+    throw new Error('Defina SUPERADMIN_EMAIL e SUPERADMIN_PASSWORD para criar o primeiro super admin em produção.');
+  }
   if (generated) password = crypto.randomBytes(12).toString('base64url') + 'Aa1';
   const weak = validatePasswordStrength(password);
   if (weak) throw new Error(`SUPERADMIN_PASSWORD inválida: ${weak}`);
@@ -189,13 +198,7 @@ if (process.env.RAILWAY_ENVIRONMENT) {
   });
 }
 
-app.use((req, res, next) => {
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  // The public citizen page (/site/<gabinete>) is meant to be embedded in the parliamentarian's own site.
-  if (!req.path.startsWith('/site/')) res.setHeader('X-Frame-Options', 'DENY');
-  res.setHeader('Referrer-Policy', 'same-origin');
-  next();
-});
+app.use(securityHeaders({ production: IS_PRODUCTION }));
 
 const api = express.Router();
 api.use((_req, res, next) => {
@@ -217,7 +220,7 @@ api.get('/health', async (_req, res) => {
 api.post('/auth/login', async (req, res) => {
   const e = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
   const p = typeof req.body?.password === 'string' ? req.body.password : '';
-  const keys = [`ip:${req.ip}`, `email:${e}`];
+  const keys = loginKeys(req.ip, e);
   if (loginBlocked(keys)) {
     return res.status(429).json({ error: 'Muitas tentativas. Aguarde 15 minutos e tente novamente.' });
   }
@@ -233,9 +236,9 @@ api.post('/auth/login', async (req, res) => {
         : 'E-mail ou senha inválidos.';
     return res.status(401).json({ error: msg });
   }
-  // Only the e-mail counter is reset: clearing the IP counter would let an attacker
+  // Only this account's counters are reset: clearing the IP counter would let an attacker
   // reset it by logging into their own account between guesses.
-  clearLoginFailures([`email:${e}`]);
+  clearLoginFailures(keys.filter((k) => !k.startsWith('ip:')));
   const u = result.user;
   await db.prepare(`UPDATE users SET last_login_at = datetime('now') WHERE id = ?`).run(u.id);
   await createSession(u.id, req, res);
@@ -419,7 +422,9 @@ api.delete('/admin/tenants/:id', requireSuperAdmin, async (req, res) => {
   if (t.status !== 'suspended') throw bad('Suspenda o gabinete antes de excluí-lo.');
   await db.prepare(`DELETE FROM tenants WHERE id = ?`).run(t.id); // cascades users, sessions, records
   await forgetWhatsAppTenant(t.id);
-  await audit({ ...actor(req), tenantId: t.id, action: 'tenant.deleted', target: t.slug });
+  // Arquivos do gabinete no volume (discursos e imagens de campanhas): sem isso ficariam dados pessoais órfãos (LGPD).
+  const removedDirs = purgeTenantFiles(t.id);
+  await audit({ ...actor(req), tenantId: t.id, action: 'tenant.deleted', target: t.slug, details: { removedDirs } });
   res.json({ ok: true });
 });
 
@@ -553,7 +558,7 @@ tenant.post('/records', async (req, res) => {
   if (req.body?.data === undefined) throw bad('Campo "data" é obrigatório.');
   const data = JSON.stringify(req.body.data);
   const t = await db.prepare(`SELECT storage_quota_mb FROM tenants WHERE id = ?`).get(tenantId) as any;
-  const used = (await tenantStorageBytes()).get(tenantId) ?? 0;
+  const used = (await tenantStorageBytes(tenantId)).get(tenantId) ?? 0;
   if (used + data.length > t.storage_quota_mb * 1024 * 1024) {
     throw new HttpError(413, 'Cota de armazenamento do gabinete esgotada.');
   }
@@ -630,6 +635,8 @@ if (process.env.JOBS_WORKER !== '0') {
 }
 await scheduleKbMaintenance();
 startMetrics();
+setInterval(() => void purgeExpiredSessions().catch(() => undefined), 3600_000).unref();
+void purgeExpiredSessions().catch(() => undefined);
 const rls = await rlsStatus().catch(() => null);
 if (rls && !rls.effective) console.warn(`[kb] ${rls.note} (papel: ${rls.role})`);
 await startClippingScheduler();

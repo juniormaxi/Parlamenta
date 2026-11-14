@@ -44,7 +44,7 @@ export const WA_MANAGER_ROLES = ['deputado', 'chefe_gabinete', 'coordenador_aten
 let binVersion: string | null = null;
 function detectBinary() {
   try {
-    binVersion = execFileSync(BIN, ['--version'], { encoding: 'utf8', timeout: 10_000 }).trim();
+    binVersion = execFileSync(BIN, ['--version'], { encoding: 'utf8', timeout: 10_000, env: wacliEnv() }).trim();
   } catch {
     binVersion = null;
   }
@@ -59,6 +59,19 @@ function storeDir(tenantId: string) {
   return dir;
 }
 
+/**
+ * Ambiente do processo wacli: só o necessário para rodar (sistema, locale, certificados) e as variáveis
+ * próprias dele. Segredos do servidor (DATABASE_URL, chaves de API, senha do superadmin...) não vão para
+ * um binário de terceiros.
+ */
+const WACLI_ENV_ALLOW = /^(PATH|HOME|USER|TMPDIR|TZ|LANG|LC_[A-Z]+|SSL_CERT_FILE|SSL_CERT_DIR|XDG_[A-Z_]+|WACLI_[A-Z0-9_]+)$/;
+export function wacliEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [k, v] of Object.entries(process.env)) if (WACLI_ENV_ALLOW.test(k)) env[k] = v;
+  env.WACLI_READONLY = '';
+  return env;
+}
+
 class WaError extends Error {
   constructor(message: string, public timedOut = false) {
     super(message);
@@ -70,7 +83,7 @@ function run<T = any>(tenantId: string, args: string[], { timeoutMs = 60_000, re
   if (!installed()) return Promise.reject(new HttpError(503, 'wacli não está instalado no servidor. Rode `npm run wacli:install`.'));
   const full = ['--store', storeDir(tenantId), '--json', '--timeout', `${Math.ceil(timeoutMs / 1000)}s`, ...(readOnly ? ['--read-only'] : []), ...args];
   return new Promise((resolve, reject) => {
-    execFile(BIN, full, { timeout: timeoutMs + 10_000, maxBuffer: 32 * 1024 * 1024, env: { ...process.env, WACLI_READONLY: '' } }, (err, stdout, stderr) => {
+    execFile(BIN, full, { timeout: timeoutMs + 10_000, maxBuffer: 32 * 1024 * 1024, env: wacliEnv() }, (err, stdout, stderr) => {
       const envelope = [...String(stdout).split('\n'), ...String(stderr).split('\n')]
         .map((l) => l.trim())
         .filter((l) => l.startsWith('{"success"'))
@@ -115,7 +128,7 @@ const L = (tenantId: string) => {
 function spawnWacli(tenantId: string, kind: Runner['kind'], args: string[], onEvent: (ev: string, data: any) => void, onExit: (code: number | null) => void): Runner {
   const proc = spawn(BIN, ['--store', storeDir(tenantId), '--events', ...args], {
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, WACLI_READONLY: '' },
+    env: wacliEnv(),
   });
   proc.stdout!.resume(); // QR em texto também sai no stdout; os eventos no stderr bastam.
   readline.createInterface({ input: proc.stderr! }).on('line', (line) => {

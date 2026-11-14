@@ -184,20 +184,32 @@ export function requireCsrfHeader(req: Request, res: Response, next: NextFunctio
   next();
 }
 
-// ---------- login rate limit (per IP + per e-mail) ----------
+// ---------- login rate limit ----------
+// Três chaves por tentativa:
+//   ip:<ip>               5 falhas / 15 min  — um IP não testa muitas senhas
+//   pair:<email>|<ip>     5 falhas / 15 min  — um IP não insiste numa conta
+//   email:<email>        20 falhas / 15 min  — teto global da conta (ataque distribuído)
+// Um atacante sozinho é barrado pelo IP muito antes de bloquear a conta de outra pessoa; o teto por
+// e-mail só é atingido por muitos IPs ao mesmo tempo.
 const attempts = new Map<string, { count: number; resetAt: number }>();
-const MAX_ATTEMPTS = 5;
 const WINDOW_MS = 15 * 60_000;
+const LIMITS: Record<string, number> = { ip: 5, pair: 5, email: 20 };
+const limitOf = (k: string) => LIMITS[k.slice(0, k.indexOf(':'))] ?? 5;
+
+export function loginKeys(ip: string | undefined, email: string) {
+  return [`ip:${ip ?? ''}`, `pair:${email}|${ip ?? ''}`, `email:${email}`];
+}
 
 export function loginBlocked(keys: string[]): boolean {
   const now = Date.now();
   return keys.some((k) => {
     const a = attempts.get(k);
-    return a && a.resetAt > now && a.count >= MAX_ATTEMPTS;
+    return a && a.resetAt > now && a.count >= limitOf(k);
   });
 }
 export function registerLoginFailure(keys: string[]) {
   const now = Date.now();
+  if (attempts.size > 50_000) for (const [k, v] of attempts) if (v.resetAt < now) attempts.delete(k);
   for (const k of keys) {
     const a = attempts.get(k);
     if (!a || a.resetAt < now) attempts.set(k, { count: 1, resetAt: now + WINDOW_MS });
@@ -206,6 +218,11 @@ export function registerLoginFailure(keys: string[]) {
 }
 export function clearLoginFailures(keys: string[]) {
   keys.forEach((k) => attempts.delete(k));
+}
+
+/** Removes expired sessions (they are already rejected on use; this only keeps the table small). */
+export async function purgeExpiredSessions() {
+  return (await db.prepare(`DELETE FROM sessions WHERE expires_at < utc_iso_now()`).run()).changes;
 }
 
 export async function login(email: string, password: string) {

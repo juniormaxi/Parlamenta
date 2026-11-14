@@ -716,8 +716,11 @@ export async function audit(entry: {
     );
 }
 
-/** Bytes used by each tenant: records + user rows + its audit trail. */
-export async function tenantStorageBytes(): Promise<Map<string, number>> {
+/**
+ * Bytes used by each tenant: records + user rows + its audit trail.
+ * With `onlyTenantId`, computes just that tenant (quota checks on every write must not scan all tenants).
+ */
+export async function tenantStorageBytes(onlyTenantId?: string): Promise<Map<string, number>> {
   const rows = await db
     .prepare(
       `SELECT t.id AS tenant_id,
@@ -737,10 +740,27 @@ export async function tenantStorageBytes(): Promise<Map<string, number>> {
        + COALESCE((SELECT SUM(length(l.name) + length(l.email) + length(l.notes) + length(l.agent_notes) + 96) FROM crm_leads l WHERE l.tenant_id = t.id), 0)
        + COALESCE((SELECT SUM(length(cc.body) + length(cc.url) + cc.image_size + 128) FROM crm_campaigns cc WHERE cc.tenant_id = t.id), 0)
          AS bytes
-       FROM tenants t`
+       FROM tenants t${onlyTenantId ? ' WHERE t.id = ?' : ''}`
     )
-    .all<{ tenant_id: string; bytes: number }>();
+    .all<{ tenant_id: string; bytes: number }>(...(onlyTenantId ? [onlyTenantId] : []));
   return new Map(rows.map((r) => [r.tenant_id, Number(r.bytes)]));
+}
+
+/**
+ * Apaga os diretórios de um gabinete no volume (DATA_DIR/tenants/<id> e DATA_DIR/crm/<id>).
+ * O WhatsApp tem limpeza própria (forgetWhatsAppTenant). Recusa ids que poderiam resolver um caminho fora
+ * desses diretórios (separadores, "." ou ".."). Devolve quantos diretórios existiam.
+ */
+export function purgeTenantFiles(tenantId: string): number {
+  if (!tenantId || /[\\/]/.test(tenantId) || tenantId === '.' || tenantId === '..' || tenantId.includes('\0')) {
+    throw new Error('Id de gabinete inválido.');
+  }
+  let n = 0;
+  for (const dir of [path.join(DATA_DIR, 'tenants', tenantId), path.join(DATA_DIR, 'crm', tenantId)]) {
+    if (fs.existsSync(dir)) n++;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  return n;
 }
 
 /** Total size of the Postgres database (replaces the SQLite file size). */
