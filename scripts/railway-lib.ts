@@ -20,6 +20,8 @@ export interface DeployConfig {
   settings: Record<string, unknown>;
   variables: Record<string, string>;
   requiredVariables: string[];
+  /** Backups automáticos do volume do Postgres (DAILY, WEEKLY, MONTHLY). */
+  databaseBackups: string[];
 }
 
 export const ROOT = path.resolve(import.meta.dirname, '..');
@@ -109,3 +111,17 @@ export function variableState(t: Target) {
 
 export const log = (s = '') => console.log(s);
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Backup schedule of the database volume: what is configured vs. deploy/railway.json. */
+export function backupScheduleState(volumeInstanceId: string) {
+  const d = gql<any>(`query($v:String!){ volumeInstanceBackupScheduleList(volumeInstanceId:$v){ kind } }`, { v: volumeInstanceId });
+  const current = (d.volumeInstanceBackupScheduleList as { kind: string }[]).map((s) => s.kind).sort();
+  const wanted = [...config.databaseBackups].sort();
+  return { current, wanted, ok: JSON.stringify(current) === JSON.stringify(wanted) };
+}
+export function applyBackupSchedule(volumeInstanceId: string) {
+  gql(`mutation($v:String!,$k:[VolumeInstanceBackupScheduleKind!]!){ volumeInstanceBackupScheduleUpdate(volumeInstanceId:$v, kinds:$k) }`, {
+    v: volumeInstanceId,
+    k: config.databaseBackups,
+  });
+}

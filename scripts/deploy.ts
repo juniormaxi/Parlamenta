@@ -17,7 +17,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { ROOT, config, target, arg, flag, gql, railway, serviceIds, currentSettings, settingsDiff, variableState, log, sleep } from './railway-lib';
+import { ROOT, config, target, arg, flag, gql, railway, serviceIds, currentSettings, settingsDiff, variableState, backupScheduleState, log, sleep } from './railway-lib';
 
 const env = arg('env');
 if (!env) {
@@ -115,13 +115,15 @@ else {
 step(3, `Configuração do serviço (${ids.projectName})`);
 const diff = settingsDiff(currentSettings(t, ids.serviceId));
 const vars = variableState(t);
-if (diff.length || vars.managedDiff.length || vars.missingRequired.length) {
+const backupsOk = !ids.dbVolumeInstanceId || backupScheduleState(ids.dbVolumeInstanceId).ok;
+if (diff.length || vars.managedDiff.length || vars.missingRequired.length || !backupsOk) {
+  if (!backupsOk) log('    ≠ agendamento de backups do Postgres');
   for (const d of diff) log(`    ≠ ${d.field}: ${JSON.stringify(d.from)} ⇒ ${JSON.stringify(d.to)}`);
   if (vars.managedDiff.length) log(`    ≠ variáveis: ${vars.managedDiff.join(', ')}`);
   if (vars.missingRequired.length) log(`    ✗ variáveis obrigatórias ausentes: ${vars.missingRequired.join(', ')}`);
   fail(`A configuração do serviço difere de deploy/railway.json. Rode: npm run railway:config -- --env ${t.name} --apply`);
 }
-log('    ✓ pré-deploy de migração, healthcheck, réplicas e variáveis conferidos');
+log('    ✓ pré-deploy de migração, healthcheck, réplicas, variáveis e backups agendados conferidos');
 
 // 4) backup
 step(4, 'Backup do banco');
