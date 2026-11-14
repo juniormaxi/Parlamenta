@@ -147,3 +147,32 @@ test('cota: o cálculo por gabinete devolve só aquele gabinete', async () => {
   assert.ok(all.size >= 2);
   assert.equal(all.get(A), one.get(A));
 });
+
+test('db:migrate com APP_DB_PASSWORD: papel restrito criado/ajustado sem privilégios e utilizável', async () => {
+  const { ensureAppRole, connectionFor } = await import('../server/migrations');
+  const pg = (await import('pg')).default;
+  const owner = connectionFor(env.superUrl);
+  await owner.connect();
+  const original = decodeURIComponent(new URL(env.appUrl).password);
+  try {
+    await assert.rejects(() => ensureAppRole(owner, 'curta'), /24 caracteres/);
+    const pw = 'Rot-' + crypto.randomUUID().replace(/-/g, '');
+    assert.equal(await ensureAppRole(owner, pw), 'atualizado');
+    const r = (await owner.query(`SELECT rolsuper, rolbypassrls, rolcreatedb, rolcreaterole, rolcanlogin FROM pg_roles WHERE rolname = 'parlamentta_app'`)).rows[0];
+    assert.deepEqual(r, { rolsuper: false, rolbypassrls: false, rolcreatedb: false, rolcreaterole: false, rolcanlogin: true });
+    const u = new URL(env.appUrl);
+    u.password = pw;
+    const app = new pg.Client({ connectionString: u.toString() });
+    await app.connect();
+    try {
+      // sem contexto de gabinete, a Base de Conhecimento não mostra nada (RLS efetivo)
+      assert.equal((await app.query(`SELECT COUNT(*)::int n FROM knowledge_items`)).rows[0].n, 0);
+      await assert.rejects(() => app.query(`CREATE TABLE x_proibida (id int)`));
+    } finally {
+      await app.end();
+    }
+  } finally {
+    await ensureAppRole(owner, original.length >= 24 ? original : original.padEnd(24, 'x')).catch(() => undefined);
+    await owner.end();
+  }
+});

@@ -46,6 +46,33 @@ export function connectionFor(url: string) {
   return new pg.Client({ connectionString: url, ssl: /sslmode=require/.test(url) || process.env.PGSSL === 'require' ? { rejectUnauthorized: false } : undefined });
 }
 
+/**
+ * Papel dedicado da aplicação (sujeito ao RLS). Com APP_DB_PASSWORD definida, `npm run db:migrate` cria o
+ * papel ou acerta a senha e os atributos dele, sempre sem privilégios especiais; os GRANTs vêm em seguida
+ * (KB_GRANTS, ao fim de toda execução). A senha vai como literal escapado pelo próprio PostgreSQL
+ * (format %L) e nunca é registrada em log.
+ */
+export const APP_ROLE = 'parlamentta_app';
+export async function ensureAppRole(client: pg.Client | pg.PoolClient, password: string) {
+  if (password.length < 24) throw new Error('APP_DB_PASSWORD precisa ter ao menos 24 caracteres.');
+  const exists = (await client.query(`SELECT 1 FROM pg_roles WHERE rolname = $1`, [APP_ROLE])).rowCount! > 0;
+  const attrs = 'LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT';
+  const sql = (
+    await client.query(`SELECT format('${exists ? 'ALTER' : 'CREATE'} ROLE %I WITH ${attrs} PASSWORD %L', $1::text, $2::text) AS q`, [APP_ROLE, password])
+  ).rows[0].q as string;
+  await client.query(sql);
+  // O papel não pode ser dono de nada nem membro de papéis privilegiados (isso anularia o RLS).
+  const bad = (
+    await client.query(
+      `SELECT (SELECT COUNT(*) FROM pg_class c JOIN pg_roles r ON r.oid = c.relowner WHERE r.rolname = $1)::int AS owned,
+              (SELECT COUNT(*) FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.member WHERE r.rolname = $1)::int AS memberships`,
+      [APP_ROLE]
+    )
+  ).rows[0];
+  if (bad.owned || bad.memberships) throw new Error(`${APP_ROLE} é dono de objetos ou membro de outro papel; corrija antes de usar.`);
+  return exists ? 'atualizado' : 'criado';
+}
+
 export interface MigrationReport {
   applied: string[];
   skipped: string[];

@@ -35,6 +35,7 @@
   },
   "requiredVariables": [
     "DATABASE_URL",
-    "MIGRATION_DATABASE_URL"
+    "MIGRATION_DATABASE_URL",
+    "APP_DB_PASSWORD"
   ]
 }

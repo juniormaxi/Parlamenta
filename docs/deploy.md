@@ -34,6 +34,19 @@ npm run deploy -- --env production --rollback --yes  # volta o CÓDIGO para o de
 O antigo `railway.json` da raiz foi removido porque a Railway não o lia: nenhum serviço estava apontado para
 ele, e o formato foi depreciado. A configuração agora é aplicada pela API, com o script acima.
 
+## Conexões com o banco (RLS)
+
+- `MIGRATION_DATABASE_URL = ${{Postgres.DATABASE_URL}}`: dono das tabelas. Só o pré-deploy usa essa conexão.
+- `APP_DB_PASSWORD`: senha do papel restrito `parlamentta_app`, com 32 bytes aleatórios. O `npm run db:migrate`
+  cria o papel ou acerta a senha e os atributos dele (sem superusuário, sem BYPASSRLS, sem posse de nada) e
+  concede só DML.
+- `DATABASE_URL = postgresql://parlamentta_app:${{APP_DB_PASSWORD}}@${{Postgres.PGHOST}}:${{Postgres.PGPORT}}/${{Postgres.PGDATABASE}}`:
+  a aplicação conecta com o papel restrito, então o RLS vale. Confira em `/api/admin/kb-metrics`, no campo `rls.effective`.
+- **Trocar a senha:** defina uma nova `APP_DB_PASSWORD` e faça deploy. O pré-deploy acerta o papel antes de a
+  nova versão subir.
+- **Rollback:** volte a `DATABASE_URL` para `${{Postgres.DATABASE_URL}}`. O RLS deixa de valer, mas os filtros
+  da aplicação continuam.
+
 ## Réplicas: por que 1
 
 A Railway não permite mais de uma réplica num serviço com volume, e este serviço precisa do volume (`/app/data`):

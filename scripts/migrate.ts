@@ -15,7 +15,7 @@ if (!url) {
   process.exit(1);
 }
 process.env.DATABASE_URL ||= url; // server/db.ts exige a variável ao ser importado (o pool não é usado aqui)
-const { runMigrations, migrationStatus, connectionFor, SCHEMA_VERSION } = await import('../server/migrations');
+const { runMigrations, migrationStatus, connectionFor, ensureAppRole, APP_ROLE, SCHEMA_VERSION } = await import('../server/migrations');
 const { pool } = await import('../server/db');
 
 const client = connectionFor(url);
@@ -24,6 +24,7 @@ try {
   if (process.argv.includes('--status')) {
     console.log(JSON.stringify(await migrationStatus(client), null, 2));
   } else {
+    if (process.env.APP_DB_PASSWORD) console.log(`[migrate] papel ${APP_ROLE}: ${await ensureAppRole(client, process.env.APP_DB_PASSWORD)}`);
     const r = await runMigrations(client, (s) => console.log(`[migrate] ${s}`));
     console.log(`[migrate] versão do esquema: ${SCHEMA_VERSION} · aplicadas agora: ${r.applied.join(', ') || 'nenhuma'}`);
     if (r.checksumMismatch.length) console.warn(`[migrate] atenção: migrações aplicadas e depois editadas: ${r.checksumMismatch.join(', ')}`);
