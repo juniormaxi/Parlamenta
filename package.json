@@ -19,7 +19,8 @@
     "deploy": "tsx scripts/deploy.ts",
     "wacli:install": "tsx scripts/install-wacli.ts",
     "test": "node --import tsx --test --test-concurrency=1 tests/*.test.ts",
-    "test:perf": "KB_PERF=1 node --import tsx --test tests/kb.perf.test.ts"
+    "test:perf": "KB_PERF=1 node --import tsx --test tests/kb.perf.test.ts",
+    "test:perf:contention": "KB_PERF=1 node --import tsx --test tests/kb.contention.perf.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
