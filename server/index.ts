@@ -16,7 +16,7 @@ import { blocklistRouter } from './blocklist';
 import { oficiosRouter } from './oficios';
 import { knowledgeRouter } from './knowledge';
 import { startJobWorker, queueStats } from './jobs';
-import { scheduleKbMaintenance } from './kb/jobs';
+import { scheduleKbMaintenance, startKbHousekeeping } from './kb/jobs';
 import { rlsStatus } from './kb/context';
 import { startMetrics, metricsSummary } from './kb/metrics';
 import { plenarioRouter, startPlenarioScheduler, normalizeSaplUrl } from './plenario';
@@ -269,7 +269,7 @@ api.post('/auth/change-password', requireAuth, async (req, res) => {
 // ----- super admin: Base de Conhecimento — fila, contadores, tempos e estado do RLS -----
 api.get('/admin/kb-metrics', requireSuperAdmin, async (_req, res) => {
   const docs = await db
-    .prepare(`SELECT tenant_id, SUM(docs)::int AS docs, SUM(bytes)::bigint AS bytes FROM knowledge_stats GROUP BY tenant_id ORDER BY 2 DESC`)
+    .prepare(`SELECT tenant_id, SUM(docs)::int AS docs, SUM(bytes)::bigint AS bytes FROM knowledge_stats_v GROUP BY tenant_id ORDER BY 2 DESC`)
     .all() as any[];
   res.json({
     generatedAt: new Date().toISOString(),
@@ -624,7 +624,10 @@ if (fs.existsSync(dist)) {
 
 await startSpeechWorker();
 // Fila persistente (Discursos, Base de Conhecimento): cada réplica roda seus workers; coordenação pelo banco.
-if (process.env.JOBS_WORKER !== '0') startJobWorker();
+if (process.env.JOBS_WORKER !== '0') {
+  startJobWorker();
+  startKbHousekeeping();
+}
 await scheduleKbMaintenance();
 startMetrics();
 const rls = await rlsStatus().catch(() => null);

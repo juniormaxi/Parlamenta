@@ -1,0 +1,40 @@
+{
+  "$comment": "Configuração do serviço web na Railway, aplicada por `npm run railway:config` (scripts/railway-config.ts). Substitui o antigo railway.json da raiz, que a Railway não lia (config-as-code depreciado).",
+  "service": "Parlamenta",
+  "databaseService": "Postgres",
+  "targets": {
+    "production": {
+      "projectId": "e118fe22-94a9-485c-af86-7eabb8f1bfc0",
+      "environmentId": "d31cc50b-309b-4a2e-9bd1-c816b23c0248",
+      "url": "https://parlamenta-production.up.railway.app",
+      "deployVia": "github",
+      "branch": "main"
+    },
+    "staging": {
+      "projectId": "ad45090c-c859-4ab7-8b6a-0839f44bef35",
+      "environmentId": "ff1faaeb-66f1-43c9-8f3f-15ae49bab06a",
+      "url": "https://parlamenta-production-47c0a256.up.railway.app",
+      "deployVia": "upload"
+    }
+  },
+  "settings": {
+    "builder": "RAILPACK",
+    "buildCommand": "npm run build",
+    "startCommand": "npm start",
+    "preDeployCommand": [
+      "npm run db:migrate"
+    ],
+    "healthcheckPath": "/api/health",
+    "healthcheckTimeout": 120,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 5,
+    "numReplicas": 1
+  },
+  "variables": {
+    "RAILPACK_PRUNE_DEPS": "true"
+  },
+  "requiredVariables": [
+    "DATABASE_URL",
+    "MIGRATION_DATABASE_URL"
+  ]
+}

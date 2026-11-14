@@ -13,7 +13,7 @@ import { db, audit } from './db';
 import { HttpError, bad } from './http';
 import { TENANT_ROLES } from './auth';
 import { withKb, userCtx, systemCtx, KB_ADMIN_ROLES } from './kb/context';
-import { publishDocument, unpublishDocument, setAccess, VISIBILITIES, type Visibility, markGraphDirty } from './kb/ingest';
+import { publishDocument, unpublishDocument, setAccess, VISIBILITIES, type Visibility, markGraphDirty, acervoGen, graphState } from './kb/ingest';
 import { enqueue, queueStats } from './jobs';
 import { timed, record, metricsSummary } from './kb/metrics';
 import { assembleGraph } from './knowledgeGraph';
@@ -101,13 +101,12 @@ async function auditSearch(req: Request, q: string, tag: string, results: number
 
 /**
  * Contagem por etiqueta (respeita a visibilidade do usuário). Em vez de varrer o acervo a cada carregamento,
- * reaproveita o resultado enquanto o acervo do gabinete não mudar: knowledge_graph_state.gen é incrementado a
+ * reaproveita o resultado enquanto o acervo do gabinete não mudar: a geração do acervo (acervoGen) muda a
  * cada publicação, exclusão ou mudança de permissão (leitura de 1 linha pela chave). Cache por réplica e usuário.
  */
 const facetCache = new Map<string, { gen: number; at: number; tags: { tag: string; count: number }[] }>();
 async function tagFacets(tenantId: string, userId: string) {
-  const g = (await db.prepare(`SELECT gen FROM knowledge_graph_state WHERE tenant_id = ?`).get(tenantId)) as any;
-  const gen = Number(g?.gen ?? 0);
+  const gen = await acervoGen(tenantId);
   const key = `${tenantId}|${userId}`;
   const hit = facetCache.get(key);
   if (hit && hit.gen === gen && Date.now() - hit.at < 10 * 60_000) return hit.tags;
@@ -212,7 +211,7 @@ knowledgeRouter.get('/graph', async (req, res) => {
             .prepare(`SELECT a, b, strength, shared FROM knowledge_links WHERE tenant_id = ? AND a = ANY(?::text[]) AND b = ANY(?::text[])`)
             .all(t, ids, ids)) as any[])
         : [];
-      const state = (await db.prepare(`SELECT dirty, built_at, duration_ms, docs, links, error FROM knowledge_graph_state WHERE tenant_id = ?`).get(t)) as any;
+      const state = await graphState(t);
       const g = assembleGraph(
         rows.map((r) => ({
           id: r.id,
@@ -249,7 +248,7 @@ knowledgeRouter.get('/graph', async (req, res) => {
 knowledgeRouter.get('/metrics', async (req, res) => {
   if (!KB_ADMIN_ROLES.includes(req.auth!.role)) throw new HttpError(403, 'Apenas Parlamentar ou Chefe de Gabinete.');
   const t = req.auth!.tenantId!;
-  const stats = (await db.prepare(`SELECT source, docs, bytes, updated_at FROM knowledge_stats WHERE tenant_id = ? ORDER BY source`).all(t)) as any[];
+  const stats = (await db.prepare(`SELECT source, docs, bytes, updated_at FROM knowledge_stats_v WHERE tenant_id = ? ORDER BY source`).all(t)) as any[];
   const attention = await withKb(userCtx(req), async () =>
     (await db
       .prepare(
@@ -258,7 +257,7 @@ knowledgeRouter.get('/metrics', async (req, res) => {
       )
       .all(t)) as any[]
   );
-  const graph = await withKb(userCtx(req), () => db.prepare(`SELECT dirty, built_at, duration_ms, docs, links, error FROM knowledge_graph_state WHERE tenant_id = ?`).get(t));
+  const graph = await withKb(userCtx(req), () => graphState(t));
   res.json({
     documents: stats.map((s) => ({ source: s.source, docs: s.docs, bytes: Number(s.bytes) })),
     totals: { docs: stats.reduce((a, s) => a + s.docs, 0), bytes: stats.reduce((a, s) => a + Number(s.bytes), 0) },

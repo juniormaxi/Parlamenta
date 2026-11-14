@@ -48,6 +48,12 @@ export interface EnqueueOpts {
   delayMs?: number;
   priority?: number;
   maxAttempts?: number;
+  /**
+   * 'refresh' (padrão): um job pendente com a mesma chave é atualizado (payload, prazo, tentativas).
+   * 'keep': o pendente fica como está (ON CONFLICT DO NOTHING). Use em caminhos quentes: 'refresh' trava a
+   * linha do job pendente até o COMMIT de quem enfileira e serializa todas as transações que usam a mesma chave.
+   */
+  onConflict?: 'refresh' | 'keep';
 }
 
 /** Enqueues (or refreshes) a job. Safe inside a transaction: the job becomes visible on COMMIT. */
@@ -56,12 +62,16 @@ export async function enqueue(o: EnqueueOpts): Promise<void> {
     .prepare(
       `INSERT INTO jobs (id, tenant_id, kind, ref, dedupe_key, payload, priority, max_attempts, run_after)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, now() + (? * interval '1 millisecond'))
-       ON CONFLICT (dedupe_key) WHERE status = 'queued' AND dedupe_key IS NOT NULL DO UPDATE SET
+       ON CONFLICT (dedupe_key) WHERE status = 'queued' AND dedupe_key IS NOT NULL ${
+         o.onConflict === 'keep'
+           ? 'DO NOTHING'
+           : `DO UPDATE SET
          payload = EXCLUDED.payload,
          run_after = LEAST(jobs.run_after, EXCLUDED.run_after),
          priority = LEAST(jobs.priority, EXCLUDED.priority),
          attempts = 0,
          last_error = ''`
+       }`
     )
     .run(
       crypto.randomUUID(),

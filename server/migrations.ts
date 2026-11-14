@@ -15,7 +15,7 @@
 import crypto from 'node:crypto';
 import pg from 'pg';
 import { BASE_SCHEMA } from './db';
-import { KB_SCHEMA, KB_POLICIES, KB_GRANTS } from './kb/schema';
+import { KB_SCHEMA, KB_POLICIES, KB_GRANTS, KB_0003_NO_HOT_ROWS } from './kb/schema';
 
 export interface Migration {
   id: string;
@@ -27,6 +27,7 @@ export const MIGRATIONS: Migration[] = [
   // Esquema que antes era aplicado no boot (idempotente: segura em bancos que já o têm).
   { id: '0001_base', description: 'Esquema base da plataforma', sql: BASE_SCHEMA },
   { id: '0002_kb_fases_1_2', description: 'Base de Conhecimento: RLS, permissões, versões, fragmentos, fila, métricas', sql: KB_SCHEMA + KB_POLICIES },
+  { id: '0003_kb_sem_linhas_disputadas', description: 'Base de Conhecimento: contadores e Mapa Neural sem travar a publicação', sql: KB_0003_NO_HOT_ROWS },
 ];
 /** Versão de esquema exigida por este código. */
 export const SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]!.id;

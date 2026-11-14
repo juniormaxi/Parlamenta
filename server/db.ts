@@ -47,6 +47,8 @@ pool.on('connect', (c) => {
 });
 
 const txStore = new AsyncLocalStorage<pg.PoolClient>();
+/** Callbacks to run after the current top-level transaction commits (see afterCommit). */
+const commitHooks = new WeakMap<pg.PoolClient, (() => unknown)[]>();
 
 /** Converts `?` placeholders (outside string literals / quoted identifiers) to $1..$n. */
 function toPg(sql: string): string {
@@ -110,17 +112,41 @@ export const db = {
 export async function tx<T>(fn: () => Promise<T>): Promise<T> {
   if (txStore.getStore()) return fn();
   const client = await pool.connect();
+  let hooks: (() => unknown)[] = [];
   try {
     await client.query('BEGIN');
+    commitHooks.set(client, hooks);
     const result = await txStore.run(client, fn);
     await client.query('COMMIT');
     return result;
   } catch (e) {
+    hooks = [];
     await client.query('ROLLBACK').catch(() => undefined);
     throw e;
   } finally {
+    commitHooks.delete(client);
     client.release();
+    // Fora da transação e com a conexão já devolvida; falhas só são registradas (quem usa precisa de
+    // uma rede de segurança para o caso de o processo cair entre o COMMIT e o gancho).
+    for (const h of hooks) {
+      try {
+        await h();
+      } catch (e) {
+        console.error('[db] afterCommit:', (e as Error)?.message ?? e);
+      }
+    }
   }
+}
+
+/**
+ * Runs `fn` after the current transaction COMMITs (discarded on ROLLBACK); outside a transaction, runs it now.
+ * Use it for work that must not hold locks of the caller's transaction (e.g. enqueueing a shared job).
+ */
+export async function afterCommit(fn: () => unknown): Promise<void> {
+  const client = txStore.getStore();
+  const hooks = client && commitHooks.get(client);
+  if (hooks) hooks.push(fn);
+  else await fn();
 }
 
 // ---------------------------------------------------------------------------
@@ -707,7 +733,7 @@ export async function tenantStorageBytes(): Promise<Map<string, number>> {
        + COALESCE((SELECT SUM(length(p.data) + 128) FROM protocols p WHERE p.tenant_id = t.id), 0)
        + COALESCE((SELECT SUM(length(ol.data) + 128) FROM official_letters ol WHERE ol.tenant_id = t.id), 0)
        -- Base de Conhecimento: contadores incrementais (knowledge_items fica sob RLS e não é varrida aqui).
-       + COALESCE((SELECT SUM(ks.bytes) FROM knowledge_stats ks WHERE ks.tenant_id = t.id), 0)
+       + COALESCE((SELECT SUM(ks.bytes) FROM knowledge_stats_v ks WHERE ks.tenant_id = t.id), 0)
        + COALESCE((SELECT SUM(length(l.name) + length(l.email) + length(l.notes) + length(l.agent_notes) + 96) FROM crm_leads l WHERE l.tenant_id = t.id), 0)
        + COALESCE((SELECT SUM(length(cc.body) + length(cc.url) + cc.image_size + 128) FROM crm_campaigns cc WHERE cc.tenant_id = t.id), 0)
          AS bytes

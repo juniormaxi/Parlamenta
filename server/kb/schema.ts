@@ -292,3 +292,44 @@ export const KB_GRANTS = `
   END
   $g$;
 `;
+
+/**
+ * Migração 0003: publicação sem linhas disputadas (ver server/kb/ingest.ts → bumpStats/markGraphDirty).
+ * Só cria objetos novos e copia o estado atual; não altera nem apaga dados existentes.
+ * As tabelas novas guardam apenas números e ids de gabinete (nenhum conteúdo documental), como knowledge_stats
+ * e jobs, por isso ficam fora do RLS.
+ */
+export const KB_0003_NO_HOT_ROWS = `
+  CREATE TABLE IF NOT EXISTS knowledge_stats_delta (
+    id         BIGSERIAL PRIMARY KEY,
+    tenant_id  TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    source     TEXT NOT NULL,
+    docs       INTEGER NOT NULL DEFAULT 0,
+    bytes      BIGINT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  );
+  CREATE INDEX IF NOT EXISTS knowledge_stats_delta_tenant ON knowledge_stats_delta (tenant_id);
+
+  -- Contadores exatos = base consolidada + variações ainda não consolidadas.
+  CREATE OR REPLACE VIEW knowledge_stats_v AS
+    SELECT tenant_id, source, GREATEST(SUM(docs), 0)::int AS docs, GREATEST(SUM(bytes), 0)::bigint AS bytes,
+           MAX(updated_at) AS updated_at
+      FROM (SELECT tenant_id, source, docs, bytes, updated_at FROM knowledge_stats
+            UNION ALL
+            SELECT tenant_id, source, docs, bytes, created_at FROM knowledge_stats_delta) u
+     GROUP BY tenant_id, source;
+
+  CREATE TABLE IF NOT EXISTS knowledge_changes (
+    seq        BIGSERIAL PRIMARY KEY,
+    tenant_id  TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  );
+  CREATE INDEX IF NOT EXISTS knowledge_changes_tenant ON knowledge_changes (tenant_id, seq);
+
+  -- A geração passa a vir da sequência de knowledge_changes: começa acima de qualquer geração já gravada,
+  -- para que caches antigos (por geração) nunca coincidam com valores novos.
+  SELECT setval(pg_get_serial_sequence('knowledge_changes', 'seq'),
+                GREATEST(COALESCE((SELECT MAX(gen) FROM knowledge_graph_state), 0), 1), true);
+  -- Gabinetes com o Mapa Neural pendente continuam pendentes.
+  INSERT INTO knowledge_changes (tenant_id) SELECT tenant_id FROM knowledge_graph_state WHERE dirty;
+`;

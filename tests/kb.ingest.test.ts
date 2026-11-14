@@ -259,9 +259,9 @@ test('carga inicial (backfill) publica registros existentes, em lotes e só uma 
 
 test('contadores incrementais batem com o catálogo (reconciliação)', async () => {
   await h.waitIdle(env.su);
-  const inc = (await env.su.query(`SELECT source, docs, bytes FROM knowledge_stats WHERE tenant_id = $1 AND docs > 0 ORDER BY source`, [T])).rows;
+  const inc = (await env.su.query(`SELECT source, docs, bytes FROM knowledge_stats_v WHERE tenant_id = $1 AND docs > 0 ORDER BY source`, [T])).rows;
   await ingest.reconcileStats(T);
-  const exact = (await env.su.query(`SELECT source, docs, bytes FROM knowledge_stats WHERE tenant_id = $1 AND docs > 0 ORDER BY source`, [T])).rows;
+  const exact = (await env.su.query(`SELECT source, docs, bytes FROM knowledge_stats_v WHERE tenant_id = $1 AND docs > 0 ORDER BY source`, [T])).rows;
   assert.deepEqual(inc, exact);
 });
 
@@ -301,4 +301,58 @@ test('Mapa Neural: pré-calculado em segundo plano, filtros por tema/período e 
   const st = (await env.su.query(`SELECT dirty, duration_ms, docs FROM knowledge_graph_state WHERE tenant_id = $1`, [T])).rows[0];
   assert.equal(st.dirty, false);
   assert.ok(st.duration_ms >= 0);
+});
+
+test('publicações concorrentes no mesmo gabinete não esperam umas pelas outras (sem linhas disputadas)', async () => {
+  const { tx } = await import('../server/db');
+  const src = 'concorrencia';
+  let release!: () => void;
+  const hold = new Promise<void>((r) => (release = r));
+  let aPublished!: () => void;
+  const aReady = new Promise<void>((r) => (aPublished = r));
+  // A publica e mantém a transação aberta (como um ofício salvo dentro de uma transação longa).
+  const a = tx(async () => {
+    await ingest.publishDocument(T, src, 'a', { title: 'Documento A', content: 'Pavimentação da avenida central.' }, U.dep.id);
+    aPublished();
+    await hold;
+  });
+  await aReady;
+  // B, no mesmo gabinete e na mesma origem, precisa terminar com A ainda aberta.
+  const t0 = Date.now();
+  const b = tx(() => ingest.publishDocument(T, src, 'b', { title: 'Documento B', content: 'Reforma da escola municipal.' }, U.dep.id));
+  const winner = await Promise.race([b.then(() => 'b'), new Promise((r) => setTimeout(() => r('timeout'), 5_000))]);
+  release();
+  await a;
+  await b;
+  assert.equal(winner, 'b', 'a publicação B ficou esperando a transação de A');
+  assert.ok(Date.now() - t0 < 5_000);
+
+  // Contadores exatos antes e depois da consolidação, e iguais ao recálculo completo.
+  const stat = async () =>
+    (await env.su.query(`SELECT docs, bytes FROM knowledge_stats_v WHERE tenant_id = $1 AND source = $2`, [T, src])).rows[0];
+  assert.equal((await stat()).docs, 2);
+  const r = await kbJobs.kbHousekeeping();
+  assert.ok(r.compacted >= 1);
+  assert.equal((await env.su.query(`SELECT COUNT(*)::int AS n FROM knowledge_stats_delta WHERE tenant_id = $1`, [T])).rows[0].n, 0);
+  const compacted = await stat();
+  assert.equal(compacted.docs, 2);
+  await ingest.reconcileStats(T);
+  assert.deepEqual(await stat(), compacted);
+
+  // Retirar um documento também só insere variações.
+  await tx(() => ingest.unpublishDocument(T, src, 'a'));
+  assert.equal((await stat()).docs, 1);
+
+  // O Mapa Neural consome as alterações vistas; a geração do acervo só cresce.
+  const { withKb, systemCtx } = await import('../server/kb/context');
+  const gen = () => withKb(systemCtx(T), () => ingest.acervoGen(T));
+  const gen0 = await gen();
+  assert.ok((await env.su.query(`SELECT COUNT(*)::int AS n FROM knowledge_changes WHERE tenant_id = $1`, [T])).rows[0].n > 0);
+  await kbJobs.rebuildGraph(T);
+  assert.equal((await env.su.query(`SELECT COUNT(*)::int AS n FROM knowledge_changes WHERE tenant_id = $1`, [T])).rows[0].n, 0);
+  assert.equal(await gen(), gen0);
+  const st = (await env.su.query(`SELECT dirty FROM knowledge_graph_state WHERE tenant_id = $1`, [T])).rows[0];
+  assert.equal(st.dirty, false);
+  await tx(() => ingest.publishDocument(T, src, 'c', { title: 'Documento C', content: 'Iluminação pública no bairro.' }, U.dep.id));
+  assert.ok((await gen()) > gen0);
 });

@@ -45,7 +45,7 @@ MIGRATION_DATABASE_URL=<dono> npm run db:status  # pending: [], altered: []
 - Ao final concede ao `parlamentta_app` apenas SELECT/INSERT/UPDATE/DELETE (sem TRUNCATE/DDL) e revoga
   escrita em `schema_migrations`.
 - Rodar duas vezes, ou em paralelo, é seguro (advisory lock + registro por migração).
-- Na Railway, `railway.json` passou a declarar `preDeployCommand: npm run db:migrate`: confirme no painel do
+- Na Railway, a configuração do serviço (pré-deploy `npm run db:migrate`, healthcheck, réplicas) fica em `deploy/railway.json` e é aplicada por `npm run railway:config -- --env <ambiente> --apply` (o antigo `railway.json` da raiz era ignorado pela Railway). Confira no painel do
   serviço de staging que o comando pré-deploy roda **uma vez** com `MIGRATION_DATABASE_URL` definida
   (comportamento da Railway não verificado neste trabalho).
 

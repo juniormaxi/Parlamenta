@@ -11,7 +11,7 @@ import { db, tx } from '../db';
 import { registerJob, enqueue, isLastAttempt, PermanentJobError, type Job } from '../jobs';
 import { withKb, systemCtx } from './context';
 import { chunkText } from './chunk';
-import { syncNow, reconcileStats, sourceAdapters } from './ingest';
+import { syncNow, reconcileStats, compactStats, sourceAdapters } from './ingest';
 import { runInThread } from './thread';
 import { record } from './metrics';
 import type { SimilarLink } from '../knowledgeGraph';
@@ -22,6 +22,7 @@ export const CHUNK_OVERLAP_TOKENS = Number(process.env.KB_CHUNK_OVERLAP_TOKENS |
 /** Documentos considerados no cálculo do Mapa Neural por gabinete (os mais recentes). */
 export const GRAPH_MAX_DOCS = Number(process.env.KB_GRAPH_MAX_DOCS || 3000);
 const BACKFILL_BATCH = 200;
+const GRAPH_DEBOUNCE_MS = Number(process.env.KB_GRAPH_DEBOUNCE_MS || 60_000);
 
 const tenantOf = (job: Job) => {
   if (!job.tenant_id) throw new PermanentJobError('Job sem gabinete.');
@@ -107,10 +108,13 @@ registerJob('kb.sync', async (job) => {
 
 export async function rebuildGraph(tenantId: string) {
   const t0 = performance.now();
-  const startGen = await withKb(systemCtx(tenantId), async () => {
-    const r = (await db.prepare(`SELECT gen FROM knowledge_graph_state WHERE tenant_id = ?`).get(tenantId)) as any;
-    return Number(r?.gen ?? 0);
-  });
+  // Alterações vistas no início: são as que este recálculo cobre. Só elas são consumidas no fim; as que
+  // chegarem durante o cálculo (ou forem confirmadas depois, com número menor) continuam pendentes.
+  const seen = (await db
+    .prepare(`SELECT COALESCE(array_agg(seq), '{}') AS seqs, COALESCE(MAX(seq), 0)::bigint AS max FROM knowledge_changes WHERE tenant_id = ?`)
+    .get(tenantId)) as { seqs: (string | number)[]; max: string | number };
+  const seenSeqs = seen.seqs.map(Number);
+  const startGen = Number(seen.max);
   const items = await withKb(systemCtx(tenantId), () =>
     db
       .prepare(
@@ -138,11 +142,16 @@ export async function rebuildGraph(tenantId: string) {
     await db
       .prepare(
         `INSERT INTO knowledge_graph_state (tenant_id, dirty, gen, built_at, duration_ms, docs, links, error) VALUES (?, false, ?, now(), ?, ?, ?, '')
-         ON CONFLICT (tenant_id) DO UPDATE SET dirty = (knowledge_graph_state.gen <> ?), built_at = now(), duration_ms = EXCLUDED.duration_ms,
-           docs = EXCLUDED.docs, links = EXCLUDED.links, error = ''`
+         ON CONFLICT (tenant_id) DO UPDATE SET dirty = false, gen = GREATEST(knowledge_graph_state.gen, EXCLUDED.gen), built_at = now(),
+           duration_ms = EXCLUDED.duration_ms, docs = EXCLUDED.docs, links = EXCLUDED.links, error = ''`
       )
-      .run(tenantId, startGen, ms, items.length, links.length, startGen);
+      .run(tenantId, startGen, ms, items.length, links.length);
+    if (seenSeqs.length) await db.prepare(`DELETE FROM knowledge_changes WHERE tenant_id = ? AND seq = ANY(?::bigint[])`).run(tenantId, seenSeqs);
   });
+  // Alterações que chegaram durante o cálculo: agenda o próximo (o job atual ainda está "running", então
+  // a publicação que as gerou pode não ter conseguido enfileirar um novo).
+  const left = await db.prepare(`SELECT 1 FROM knowledge_changes WHERE tenant_id = ? LIMIT 1`).get(tenantId);
+  if (left) await enqueue({ tenantId, kind: 'kb.graph', ref: tenantId, dedupeKey: `kb.graph:${tenantId}`, delayMs: GRAPH_DEBOUNCE_MS, priority: 200, onConflict: 'keep' });
   record('kb.graph.build', ms, tenantId);
   return { docs: items.length, links: links.length, ms };
 }
@@ -191,6 +200,39 @@ registerJob(
 registerJob('kb.reconcile', async (job) => {
   await reconcileStats(tenantOf(job));
 });
+
+/**
+ * Manutenção periódica (qualquer réplica; idempotente):
+ *   - consolida as variações dos contadores (knowledge_stats_delta → knowledge_stats);
+ *   - rede de segurança do Mapa Neural: gabinete com alteração pendente há mais de 5 min e sem recálculo na
+ *     fila ganha um (cobre publicações cuja transação terminou depois que o recálculo já tinha começado).
+ */
+export async function kbHousekeeping() {
+  const deltas = (await db.prepare(`SELECT DISTINCT tenant_id FROM knowledge_stats_delta`).all()) as { tenant_id: string }[];
+  for (const { tenant_id } of deltas) await compactStats(tenant_id);
+  const stale = (await db
+    .prepare(
+      `SELECT DISTINCT c.tenant_id FROM knowledge_changes c
+        WHERE c.created_at < now() - interval '5 minutes'
+          AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.dedupe_key = 'kb.graph:' || c.tenant_id AND j.status IN ('queued','running'))`
+    )
+    .all()) as { tenant_id: string }[];
+  for (const { tenant_id } of stale) {
+    await enqueue({ tenantId: tenant_id, kind: 'kb.graph', ref: tenant_id, dedupeKey: `kb.graph:${tenant_id}`, priority: 200, onConflict: 'keep' });
+  }
+  return { compacted: deltas.length, graphRequeued: stale.length };
+}
+
+let housekeeping: NodeJS.Timeout | null = null;
+export function startKbHousekeeping(everyMs = Number(process.env.KB_HOUSEKEEPING_MS || 60_000)) {
+  if (housekeeping) return;
+  housekeeping = setInterval(() => void kbHousekeeping().catch((e) => console.error('[kb] manutenção:', (e as Error).message)), everyMs);
+  housekeeping.unref();
+}
+export function stopKbHousekeeping() {
+  if (housekeeping) clearInterval(housekeeping);
+  housekeeping = null;
+}
 
 /**
  * Boot/maintenance (any replica; dedupe keys make it idempotent): initial load of the existing records of every

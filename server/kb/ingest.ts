@@ -16,7 +16,7 @@
  * gravação de origem também é desfeita. requestSync() só enfileira (para lotes, ex.: Clipping).
  */
 import crypto from 'node:crypto';
-import { db, audit } from '../db';
+import { db, audit, afterCommit } from '../db';
 import { enqueue } from '../jobs';
 import { withKb, systemCtx } from './context';
 import { themesOf } from '../knowledgeGraph';
@@ -71,26 +71,68 @@ export const sha256 = (s: string) => crypto.createHash('sha256').update(s, 'utf8
 const GRAPH_DEBOUNCE_MS = Number(process.env.KB_GRAPH_DEBOUNCE_MS || 60_000);
 const PURGE_DELAY_MS = Number(process.env.KB_PURGE_DELAY_MS || 10 * 60_000);
 
+/**
+ * Contadores e Mapa Neural sem linhas disputadas.
+ *
+ * A publicação roda dentro da transação de quem a chama. Antes, cada publicação atualizava linhas únicas
+ * do gabinete (knowledge_stats e knowledge_graph_state) e o job pendente do Mapa Neural, e segurava esses
+ * travamentos até o COMMIT. Com isso, publicações concorrentes no mesmo gabinete entravam em fila: em
+ * staging, o kb.sync levava ~2 s em média e chegava a 32 s. Agora a publicação só INSERE:
+ *   - knowledge_stats_delta: variações dos contadores, consolidadas depois em knowledge_stats (compactStats).
+ *     Leitura: view knowledge_stats_v (base + variações ainda não consolidadas), sempre exata;
+ *   - knowledge_changes: marcadores de alteração do acervo, consumidos pelo recálculo do Mapa Neural;
+ *   - job kb.graph enfileirado só depois do COMMIT (afterCommit).
+ */
 async function bumpStats(tenantId: string, source: string, dDocs: number, dBytes: number) {
   if (!dDocs && !dBytes) return;
-  await db
-    .prepare(
-      `INSERT INTO knowledge_stats (tenant_id, source, docs, bytes) VALUES (?, ?, GREATEST(?, 0), GREATEST(?, 0))
-       ON CONFLICT (tenant_id, source) DO UPDATE SET docs = GREATEST(knowledge_stats.docs + ?, 0),
-         bytes = GREATEST(knowledge_stats.bytes + ?, 0), updated_at = now()`
-    )
-    .run(tenantId, source, dDocs, dBytes, dDocs, dBytes);
+  await db.prepare(`INSERT INTO knowledge_stats_delta (tenant_id, source, docs, bytes) VALUES (?, ?, ?, ?)`).run(tenantId, source, dDocs, dBytes);
 }
 
-/** Marks the tenant's Mapa Neural as stale and schedules a (debounced) rebuild. */
-export async function markGraphDirty(tenantId: string) {
+/** Consolida as variações dos contadores do gabinete. Só apaga variações já confirmadas (visíveis), então nada se perde. */
+export async function compactStats(tenantId: string) {
   await db
     .prepare(
-      `INSERT INTO knowledge_graph_state (tenant_id, dirty, gen) VALUES (?, true, 1)
-       ON CONFLICT (tenant_id) DO UPDATE SET dirty = true, gen = knowledge_graph_state.gen + 1`
+      `WITH d AS (DELETE FROM knowledge_stats_delta WHERE tenant_id = ? RETURNING source, docs, bytes)
+       INSERT INTO knowledge_stats (tenant_id, source, docs, bytes)
+       SELECT ?, source, SUM(docs)::int, SUM(bytes)::bigint FROM d GROUP BY source
+       ON CONFLICT (tenant_id, source) DO UPDATE SET docs = GREATEST(knowledge_stats.docs + EXCLUDED.docs, 0),
+         bytes = GREATEST(knowledge_stats.bytes + EXCLUDED.bytes, 0), updated_at = now()`
     )
-    .run(tenantId);
-  await enqueue({ tenantId, kind: 'kb.graph', ref: tenantId, dedupeKey: `kb.graph:${tenantId}`, delayMs: GRAPH_DEBOUNCE_MS, priority: 200 });
+    .run(tenantId, tenantId);
+}
+
+/** Marks the tenant's Mapa Neural as stale and schedules a (debounced) rebuild. Insert-only: no shared row is locked. */
+export async function markGraphDirty(tenantId: string) {
+  await db.prepare(`INSERT INTO knowledge_changes (tenant_id) VALUES (?)`).run(tenantId);
+  // Enfileirar dentro da transação faria publicações concorrentes esperarem umas pelas outras na chave
+  // única do job pendente (até com ON CONFLICT DO NOTHING). Por isso só depois do COMMIT; se o processo
+  // cair antes disso, a manutenção periódica (kbHousekeeping) agenda o recálculo pelos marcadores.
+  await afterCommit(() =>
+    enqueue({ tenantId, kind: 'kb.graph', ref: tenantId, dedupeKey: `kb.graph:${tenantId}`, delayMs: GRAPH_DEBOUNCE_MS, priority: 200, onConflict: 'keep' })
+  );
+}
+
+/** Geração do acervo do gabinete (muda a cada publicação, exclusão ou mudança de permissão). */
+export async function acervoGen(tenantId: string): Promise<number> {
+  const r = (await db
+    .prepare(
+      `SELECT GREATEST(COALESCE((SELECT gen FROM knowledge_graph_state WHERE tenant_id = ?), 0),
+                       COALESCE((SELECT MAX(seq) FROM knowledge_changes WHERE tenant_id = ?), 0))::bigint AS gen`
+    )
+    .get(tenantId, tenantId)) as any;
+  return Number(r?.gen ?? 0);
+}
+
+/** Estado do Mapa Neural; "dirty" também é verdadeiro quando há alterações ainda não consumidas. */
+export async function graphState(tenantId: string) {
+  return (await db
+    .prepare(
+      `SELECT (COALESCE(g.dirty, true) OR EXISTS (SELECT 1 FROM knowledge_changes c WHERE c.tenant_id = t.tid)) AS dirty,
+              g.built_at, g.duration_ms, COALESCE(g.docs, 0) AS docs, COALESCE(g.links, 0) AS links, COALESCE(g.error, '') AS error
+         FROM (SELECT ?::text AS tid) t LEFT JOIN knowledge_graph_state g ON g.tenant_id = t.tid
+        WHERE g.tenant_id IS NOT NULL OR EXISTS (SELECT 1 FROM knowledge_changes c WHERE c.tenant_id = t.tid)`
+    )
+    .get(tenantId)) as any;
 }
 
 async function writeAcl(tenantId: string, itemId: string, acl: DocInput['acl'], grantedBy: string | null) {
@@ -277,6 +319,9 @@ export async function reconcileStats(tenantId: string) {
            FROM knowledge_items WHERE tenant_id = ? AND deleted_at IS NULL GROUP BY source`
       )
       .all(tenantId)) as any[];
+    // Variações ainda não confirmadas por outras transações não são vistas aqui nem pela contagem acima:
+    // sobrevivem e somam o documento correspondente uma única vez.
+    await db.prepare(`DELETE FROM knowledge_stats_delta WHERE tenant_id = ?`).run(tenantId);
     await db.prepare(`DELETE FROM knowledge_stats WHERE tenant_id = ?`).run(tenantId);
     for (const r of rows) {
       await db.prepare(`INSERT INTO knowledge_stats (tenant_id, source, docs, bytes) VALUES (?, ?, ?, ?)`).run(tenantId, r.source, r.docs, r.bytes);
