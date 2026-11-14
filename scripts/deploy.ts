@@ -89,8 +89,18 @@ step(1, 'Código');
 if (git('status', '--porcelain')) fail('Há alterações não commitadas. Faça commit (o deploy envia só o que está commitado).');
 const branch = git('rev-parse', '--abbrev-ref', 'HEAD');
 const sha = git('rev-parse', 'HEAD');
-if (t.deployVia === 'github' && branch !== t.branch) fail(`Produção sai da branch ${t.branch}; você está em ${branch}.`);
 log(`    ${branch} @ ${sha.slice(0, 7)} — ${git('log', '-1', '--format=%s')}`);
+if (t.deployVia === 'github') {
+  // Publica o commit atual em origin/<branch> só por avanço direto (fast-forward): nunca reescreve a main.
+  execFileSync('git', ['fetch', '-q', 'origin', t.branch!], { cwd: ROOT });
+  try {
+    execFileSync('git', ['merge-base', '--is-ancestor', `origin/${t.branch}`, sha], { cwd: ROOT });
+  } catch {
+    fail(`${sha.slice(0, 7)} não é um avanço direto de origin/${t.branch}. Atualize sua branch com a ${t.branch} antes.`);
+  }
+  const ahead = git('rev-list', '--count', `origin/${t.branch}..${sha}`);
+  log(`    ${ahead} commit(s) à frente de origin/${t.branch}`);
+}
 
 // 2) checks
 step(2, 'Tipos e testes');

@@ -15,7 +15,7 @@ npm run deploy -- --env production --rollback --yes  # volta o CÓDIGO para o de
 
 `npm run deploy` sempre faz, nesta ordem:
 
-1. Confere que não há alterações sem commit. Produção só sai da `main`.
+1. Confere que não há alterações sem commit. Em produção, o commit precisa ser um avanço direto (fast-forward) da `origin/main`, publicado com `push HEAD:main`; a `main` nunca é reescrita.
 2. Roda `npm run lint` e `npm test` (pule com `--skip-tests`).
 3. Confere a configuração do serviço contra `deploy/railway.json` e **para** se houver diferença.
 4. Faz backup do volume do Postgres. Em produção é obrigatório; em staging, `--no-backup` pula.
