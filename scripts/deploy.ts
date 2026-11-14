@@ -5,7 +5,7 @@
  *   npm run deploy -- --env production              # push da main → deploy pelo gatilho do GitHub na Railway
  *   npm run deploy -- --env production --rollback   # volta para o deploy anterior bem-sucedido (código; o banco não volta)
  *
- * Etapas: 1) árvore limpa e branch certa  2) tipos + testes (--skip-tests pula)  3) configuração do serviço
+ * Etapas: 1) árvore limpa; em produção, avanço direto da main  2) tipos + testes (--skip-tests pula)  3) configuração do serviço
  * igual a deploy/railway.json (senão para e manda rodar `npm run railway:config`)  4) backup do volume do
  * Postgres (obrigatório em produção; --no-backup só em staging)  5) deploy  6) acompanha até SUCCESS/FAILED
  * e confere /api/health.
