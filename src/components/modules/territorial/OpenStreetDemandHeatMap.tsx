@@ -11,6 +11,13 @@ import {
   Flame,
   Info,
 } from 'lucide-react';
+
+/**
+ * O Leaflet monta marcadores (divIcon) e popups com HTML cru, fora do React. Todo valor interpolado passa por
+ * aqui: nomes de município, temas e responsáveis podem vir de dados digitados por usuários ou cidadãos.
+ */
+const esc = (v: unknown) =>
+  String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 import { MunicipalityData } from '../../../types';
 
 interface OpenStreetDemandHeatMapProps {
@@ -159,7 +166,7 @@ export const OpenStreetDemandHeatMap: React.FC<OpenStreetDemandHeatMapProps> = (
             box-shadow: 0 4px 10px rgba(0,0,0,0.3);
             transition: all 0.2s ease;
           " class="group-hover:scale-110">
-            ${count}
+            ${esc(count)}
           </div>
           <div style="
             background: ${isSelected ? '#102C45' : 'rgba(255, 255, 255, 0.95)'};
@@ -173,7 +180,7 @@ export const OpenStreetDemandHeatMap: React.FC<OpenStreetDemandHeatMapProps> = (
             margin-top: 3px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.15);
           ">
-            ${m.name}
+            ${esc(m.name)}
           </div>
         </div>
       `;
@@ -191,17 +198,17 @@ export const OpenStreetDemandHeatMap: React.FC<OpenStreetDemandHeatMapProps> = (
       const popupContent = `
         <div style="font-family: 'Plus Jakarta Sans', sans-serif; padding: 4px; min-width: 190px;">
           <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #E2E8F0; padding-bottom: 4px; margin-bottom: 6px;">
-            <strong style="color: #102C45; font-size: 13px;">${m.name}</strong>
-            <span style="font-size: 10px; font-weight: 600; color: #176B80; background: #E9F1F4; padding: 2px 5px; border-radius: 4px;">${m.region}</span>
+            <strong style="color: #102C45; font-size: 13px;">${esc(m.name)}</strong>
+            <span style="font-size: 10px; font-weight: 600; color: #176B80; background: #E9F1F4; padding: 2px 5px; border-radius: 4px;">${esc(m.region)}</span>
           </div>
           <div style="font-size: 11px; color: #475569; margin-bottom: 4px;">
-            <strong>${m.demandsCount} demandas</strong> registradas (${m.demandsResolved} resolvidas)
+            <strong>${esc(m.demandsCount)} demandas</strong> registradas (${esc(m.demandsResolved)} resolvidas)
           </div>
           <div style="font-size: 10px; color: #64748B; margin-bottom: 6px;">
-            Articulador: <strong style="color: #1E293B;">${m.leadAssessor}</strong>
+            Articulador: <strong style="color: #1E293B;">${esc(m.leadAssessor)}</strong>
           </div>
           <div style="font-size: 10px; color: #0F172A; background: #F8FAFC; padding: 4px; border-radius: 4px; border: 1px solid #E2E8F0;">
-            Principal pauta: <strong>${m.demandsTopThemes[0]?.theme || 'Geral'}</strong> (${m.demandsTopThemes[0]?.count || 0})
+            Principal pauta: <strong>${esc(m.demandsTopThemes[0]?.theme || 'Geral')}</strong> (${esc(m.demandsTopThemes[0]?.count || 0)})
           </div>
         </div>
       `;
